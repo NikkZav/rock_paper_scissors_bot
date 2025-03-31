@@ -1,36 +1,259 @@
-from aiogram import F, Router
+import asyncio
+import time
+from aiogram import F, Router, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery
 from keyboards.keyboards import yes_no_kb, create_inline_kb
 from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
-from services.services import get_bot_choice, get_winner
+from services.services import (get_bot_choice, get_winner,
+                               get_random_online_user)
+from aiogram.filters import Command, CommandStart, StateFilter
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import default_state
+from aiogram.fsm.storage.base import StorageKey
+from states.states import FSMMenu, FSMPlay
+from aiogram.exceptions import TelegramBadRequest
+
 
 router = Router()
 
 
 # Этот хэндлер срабатывает на команду /start
 @router.message(CommandStart())
-async def process_start_command(message: Message):
+async def process_start_command(message: Message, state: FSMContext):
     await message.answer(text=LEXICON['/start'], reply_markup=yes_no_kb)
+    await state.clear()
+    await state.set_state(FSMMenu.game_consent)
 
 
 # Этот хэндлер срабатывает на команду /help
 @router.message(Command(commands='help'))
-async def process_help_command(message: Message):
+async def process_help_command(message: Message, state: FSMContext):
     await message.answer(text=LEXICON['/help'], reply_markup=yes_no_kb)
+    await state.set_state(FSMMenu.game_consent)
 
 
 # Этот хэндлер срабатывает на согласие пользователя играть в игру
-@router.message(F.text == LEXICON['yes_button'])
-async def process_yes_answer(message: Message):
-    game_kb = create_inline_kb('rock', 'paper', 'scissors')
-    await message.answer(text=LEXICON['yes'], reply_markup=game_kb)
+@router.message(F.text == LEXICON['yes_button'],
+                StateFilter(FSMMenu.game_consent))
+async def process_game_mode(message: Message, state: FSMContext):
+    choice_game_mode_kb = create_inline_kb('quick_game', 'tournir')
+    await message.answer(text=LEXICON['choice_game_mode'],
+                         reply_markup=choice_game_mode_kb)
+    await state.set_state(FSMMenu.choice_game_mode)
 
 
 # Этот хэндлер срабатывает на отказ пользователя играть в игру
-@router.message(F.text == LEXICON['no_button'])
-async def process_no_answer(message: Message):
-    await message.answer(text=LEXICON['no'])
+@router.message(F.text == LEXICON['no_button'],
+                StateFilter(FSMMenu.game_consent))
+async def process_no_answer(message: Message, state: FSMContext):
+    await message.answer(text=LEXICON['refused_to_play'])
+    await state.clear()
+
+
+@router.callback_query(F.data == 'quick_game',
+                       StateFilter(FSMMenu.choice_game_mode))
+async def process_quick_game(callback: CallbackQuery, state: FSMContext):
+    message: Message = callback.message  # type: ignore[assignment]
+    choice_user_search_kb = create_inline_kb('matchmaking')
+    await message.answer(text=LEXICON['choice_user_search'],
+                         reply_markup=choice_user_search_kb)
+    await state.set_state(FSMMenu.quick_game)
+
+
+@router.callback_query(F.data == 'matchmaking',
+                       StateFilter(FSMMenu.quick_game))
+async def process_matchmaking(callback: CallbackQuery, state: FSMContext):
+    message: Message = callback.message  # type: ignore[assignment]
+    user_id: int = callback.from_user.id  # type: ignore[assignment]
+    bot: Bot = message.bot  # type: ignore[assignment]
+    storage = state.storage
+
+    try:
+        opponent_id = get_random_online_user(except_user_id=user_id)
+    except IndexError:
+        await message.answer(text=LEXICON['no_online_users'])
+        await state.clear()
+        return
+
+    # Создаем корректный ключ состояния
+    opponent_key = StorageKey(
+        bot_id=bot.id,
+        chat_id=opponent_id,
+        user_id=opponent_id
+    )
+
+    # Создаем контекст состояния для соперника
+    opponent_state = FSMContext(storage=storage, key=opponent_key)
+
+    # Устанавливаем сопернику новое состояние
+    await opponent_state.set_state(FSMPlay.waiting_game_start)
+
+    # Устанавливаем новое состояние для текущего пользователя
+    await state.set_state(FSMPlay.waiting_game_start)
+
+    waiting_game_start_kb = create_inline_kb('start_game', 'refuse')
+
+    # Отправляем сообщение сопернику о том, что его выбрали для игры
+    await bot.send_message(
+        chat_id=opponent_id,
+        text=LEXICON['you_are_chosen'].format(user_id=user_id),
+        reply_markup=waiting_game_start_kb
+    )
+
+    # Отправляем сообщение пользователю о его сопернике
+    await message.answer(
+        text=LEXICON['your_opponent'].format(opponent_id=opponent_id),
+        reply_markup=waiting_game_start_kb,
+        parse_mode='HTML'
+    )
+
+    await state.update_data(opponent_id=opponent_id)
+    await opponent_state.update_data(opponent_id=user_id)
+
+
+@router.callback_query(F.data == 'start_game',
+                       StateFilter(FSMPlay.waiting_game_start))
+async def process_start_game(callback: CallbackQuery, state: FSMContext):
+    message: Message = callback.message  # type: ignore[assignment]
+    bot: Bot = message.bot  # type: ignore[assignment]
+    user_data = await state.get_data()
+
+    try:
+        opponent_id: int = user_data['opponent_id']
+    except KeyError:
+        await message.answer(text=LEXICON['opponent_not_found'])
+        await state.clear()
+        return
+
+    await state.update_data(ready_to_play=True)
+
+    # Получаем состояние соперника
+    opponent_key = StorageKey(
+        bot_id=bot.id,
+        chat_id=opponent_id,
+        user_id=opponent_id
+    )
+    opponent_state = FSMContext(storage=state.storage, key=opponent_key)
+
+    async def wait_for_opponent():
+        """Ожидание ответа соперника с обновлениями статуса"""
+        start_time = time.monotonic()
+        while time.monotonic() - start_time < 10:
+            # Проверяем не отменил ли соперник игру
+            opponent_data = await opponent_state.get_data()
+            if 'opponent_id' not in opponent_data:  # Если состояние очищено
+                raise asyncio.CancelledError  # Вызываем отмену текущей задачи
+
+            if opponent_data.get('ready_to_play', False):
+                return True
+
+            await message.answer(LEXICON['waiting_opponent'])
+            await asyncio.sleep(2)
+
+        return False
+
+    async def timeout_handler():
+        """Обработчик таймаута с возможностью досрочной отмены"""
+        await asyncio.sleep(10)
+        return False
+
+    # Создаем задачи из корутин
+    wait_task = asyncio.create_task(wait_for_opponent())
+    timeout_task = asyncio.create_task(timeout_handler())
+
+    # Запускаем обе задачи параллельно
+    try:
+        done, pending = await asyncio.wait(
+            {wait_task, timeout_task},
+            return_when=asyncio.FIRST_COMPLETED
+        )
+
+        result = any(task.result() for task in done)
+    except asyncio.CancelledError:
+        # Если задача была отменена извне
+        await message.answer(LEXICON['game_cancelled'])
+        return
+    finally:
+        # Всегда отменяем оставшиеся задачи
+        for task in pending:
+            task.cancel()
+
+    if result:
+        # Оба игрока готовы
+        await message.answer(LEXICON['opponent_ready_to_play'])
+
+        # Запускаем игру
+        game_kb = create_inline_kb(*LEXICON_MOVES.keys())
+        await message.answer(LEXICON['invitation_choose_action'],
+                             reply_markup=game_kb)
+        await state.set_state(FSMPlay.choice_action_for_first_hand)
+        await opponent_state.set_state(FSMPlay.choice_action_for_first_hand)
+    else:
+        # Таймаут
+        await message.answer(LEXICON['too_long_waiting_response'])
+        await state.clear()
+        await opponent_state.clear()
+
+        # Уведомляем соперника об отмене
+        try:
+            await bot.send_message(
+                chat_id=opponent_id,
+                text=LEXICON['game_cancelled']
+            )
+        except TelegramBadRequest:
+            pass  # Если пользователь заблокировал бота
+
+
+@router.callback_query(F.data == 'refuse',
+                       StateFilter(FSMPlay.waiting_game_start))
+async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
+    message: Message = callback.message  # type: ignore[assignment]
+    bot: Bot = message.bot  # type: ignore[assignment]
+    user_data = await state.get_data()
+
+    try:
+        opponent_id: int = user_data['opponent_id']
+    except KeyError:
+        await message.answer(text=LEXICON['opponent_not_found'])
+        await state.clear()
+        return
+
+    # Очищаем состояние текущего пользователя
+    await state.clear()
+
+    # Очищаем состояние соперника
+    opponent_key = StorageKey(
+        bot_id=bot.id,
+        chat_id=opponent_id,
+        user_id=opponent_id
+    )
+    opponent_state = FSMContext(storage=state.storage, key=opponent_key)
+    await opponent_state.clear()
+
+    # Уведомляем обоих игроков
+    try:
+        await bot.send_message(
+            chat_id=opponent_id,
+            text=LEXICON['opponent_refused']
+        )
+    except TelegramBadRequest:
+        pass  # Если соперник заблокировал бота
+
+    await message.answer(LEXICON['game_cancelled'])
+
+
+@router.callback_query(F.data.in_(LEXICON_MOVES.keys()),
+                       StateFilter(FSMPlay.choice_action_for_first_hand))
+async def process_first_hand(callback: CallbackQuery, state: FSMContext):
+    message: Message = callback.message  # type: ignore[assignment]
+    action_for_first_hand: str = callback.data  # type: ignore[assignment]
+
+    await state.update_data(action_for_first_hand=action_for_first_hand)
+    await message.answer(text=f'{LEXICON['user_choice']} '
+                              f'- {LEXICON[action_for_first_hand]}')
+
+    await state.set_state(FSMPlay.choice_action_for_second_hand)
 
 
 # Этот хэндлер срабатывает на любую из игровых кнопок

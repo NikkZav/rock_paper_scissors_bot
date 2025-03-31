@@ -6,6 +6,9 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from config_data.config import Config, load_config
 from handlers import other_handlers, user_handlers
+from middlewares.actual_state import OnlineUserMiddleware
+from database.db import cleanup_task, online_users
+
 
 # Инициализируем логгер
 logger = logging.getLogger(__name__)
@@ -31,6 +34,11 @@ async def main():
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
     dp = Dispatcher()
+
+    asyncio.create_task(cleanup_task(online_users))
+
+    # Регистрация middleware
+    dp.update.middleware(OnlineUserMiddleware())
 
     # Регистриуем роутеры в диспетчере
     dp.include_router(user_handlers.router)

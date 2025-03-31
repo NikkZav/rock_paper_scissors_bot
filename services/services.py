@@ -1,6 +1,8 @@
 import random
 
 from lexicon.lexicon_ru import LEXICON_MOVES
+from database.db import online_users
+from random import choice
 
 
 # Функция, возвращающая случайный выбор бота в игре
@@ -20,3 +22,12 @@ def get_winner(user_choice: str, bot_choice: str) -> str:
     elif rules[user_choice] == bot_choice:
         return "user_won"
     return "bot_won"
+
+
+def get_random_online_user(except_user_id: int) -> int:
+    users = {**online_users.users}
+    users.pop(except_user_id, None)
+    if not len(users):
+        raise IndexError
+    opponent_id = choice(list(users.keys()))
+    return opponent_id
