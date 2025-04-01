@@ -136,50 +136,28 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
     )
     opponent_state = FSMContext(storage=state.storage, key=opponent_key)
 
-    async def wait_for_opponent():
+    async def wait_opponent_consent() -> None:
         """Ожидание ответа соперника с обновлениями статуса"""
-        start_time = time.monotonic()
-        while time.monotonic() - start_time < 10:
-            # Проверяем не отменил ли соперник игру
+        while True:
             opponent_data = await opponent_state.get_data()
-            if 'opponent_id' not in opponent_data:  # Если состояние очищено
-                raise asyncio.CancelledError  # Вызываем отмену текущей задачи
+            decision: bool | None = opponent_data.get('ready_to_play')
 
-            if opponent_data.get('ready_to_play', False):
-                return True
+            # Проверяем не отменил ли соперник игру
+            if decision is False or 'opponent_id' not in opponent_data:
+                raise asyncio.CancelledError  # Вызываем отмену задачи
+
+            if decision is True:  # Если соперник готов к игре
+                return  # Выходим из функции и завершаем задачу
 
             await message.answer(LEXICON['waiting_opponent'])
             await asyncio.sleep(2)
 
-        return False
+    # Создаем задачу
+    wait_opponent_consent_task = asyncio.create_task(wait_opponent_consent())
 
-    async def timeout_handler():
-        """Обработчик таймаута с возможностью досрочной отмены"""
-        await asyncio.sleep(10)
-        return False
-
-    # Создаем задачи из корутин
-    wait_task = asyncio.create_task(wait_for_opponent())
-    timeout_task = asyncio.create_task(timeout_handler())
-
-    # Запускаем обе задачи параллельно
+    # Запускаем задачу с таймаутом
     try:
-        done, pending = await asyncio.wait(
-            {wait_task, timeout_task},
-            return_when=asyncio.FIRST_COMPLETED
-        )
-
-        result = any(task.result() for task in done)
-    except asyncio.CancelledError:
-        # Если задача была отменена извне
-        await message.answer(LEXICON['game_cancelled'])
-        return
-    finally:
-        # Всегда отменяем оставшиеся задачи
-        for task in pending:
-            task.cancel()
-
-    if result:
+        await asyncio.wait_for(wait_opponent_consent_task, timeout=10)
         # Оба игрока готовы
         await message.answer(LEXICON['opponent_ready_to_play'])
 
@@ -189,20 +167,20 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
                              reply_markup=game_kb)
         await state.set_state(FSMPlay.choice_action_for_first_hand)
         await opponent_state.set_state(FSMPlay.choice_action_for_first_hand)
-    else:
-        # Таймаут
-        await message.answer(LEXICON['too_long_waiting_response'])
-        await state.clear()
-        await opponent_state.clear()
+        return  # Выходим из функции
 
-        # Уведомляем соперника об отмене
-        try:
-            await bot.send_message(
-                chat_id=opponent_id,
-                text=LEXICON['game_cancelled']
-            )
-        except TelegramBadRequest:
-            pass  # Если пользователь заблокировал бота
+    except asyncio.CancelledError:
+        # Соперник отменил игру
+        await message.answer(LEXICON['game_cancelled'])
+    except asyncio.TimeoutError:
+        await message.answer(LEXICON['too_long_waiting_response'])
+        await bot.send_message(  # Уведомляем соперника об отмене
+            chat_id=opponent_id,
+            text=LEXICON['game_cancelled']
+        )
+    # Очищаем состояния игроков
+    await state.clear()
+    await opponent_state.clear()
 
 
 @router.callback_query(F.data == 'refuse',
@@ -232,14 +210,10 @@ async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
     await opponent_state.clear()
 
     # Уведомляем обоих игроков
-    try:
-        await bot.send_message(
-            chat_id=opponent_id,
-            text=LEXICON['opponent_refused']
-        )
-    except TelegramBadRequest:
-        pass  # Если соперник заблокировал бота
-
+    await bot.send_message(
+        chat_id=opponent_id,
+        text=LEXICON['opponent_refused']
+    )
     await message.answer(LEXICON['game_cancelled'])
 
 
