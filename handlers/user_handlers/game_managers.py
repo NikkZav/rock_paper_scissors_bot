@@ -8,31 +8,15 @@ from keyboards.keyboards import create_inline_kb
 from states.states import FSMPlay
 
 
-async def get_opponent_id(callback: CallbackQuery,
-                          state: FSMContext) -> int:
-    message: Message = callback.message  # type: ignore[assignment]
-    user_data = await state.get_data()
-
-    try:
-        opponent_id: int = user_data['opponent_id']
-        return opponent_id
-    except KeyError:
-        await message.answer(text=LEXICON['opponent_not_found'])
-        await state.clear()
-        raise KeyError
-
-
-class ConnectionManager:
+class GameMaster:
     def __init__(self,
                  callback: CallbackQuery,
                  state: FSMContext,
-                 opponent_id: int,
-                 user_data: dict):
+                 opponent_id: int):
         self.message: Message = callback.message  # type: ignore[assignment]
         self.bot: Bot = self.message.bot  # type: ignore[assignment]
         self.state: FSMContext = state
         self.opponent_id: int = opponent_id
-        self.user_data: dict = user_data
         self.opponent_key = StorageKey(
             bot_id=self.bot.id,
             chat_id=opponent_id,
@@ -59,7 +43,7 @@ class ConnectionManager:
     async def set_state_opponent(self, state: StateType) -> None:
         await self.opponent_state.set_state(state)
 
-    async def launch_first_hand_round(self) -> None:
+    async def start_first_hand_round(self) -> None:
         # Оба игрока готовы
         await self.answer_user(LEXICON['opponent_ready_to_play'])
 
@@ -67,16 +51,46 @@ class ConnectionManager:
         game_kb = create_inline_kb(*LEXICON_MOVES.keys())
         await self.answer_user(LEXICON['invitation_choose_action'],
                                reply_markup=game_kb)
-        await self.set_state_user(
-            FSMPlay.choice_action_for_first_hand)
-        await self.set_state_opponent(
-            FSMPlay.choice_action_for_first_hand)
+        await self.set_state_user(FSMPlay.choice_action_for_first_hand)
+        await self.set_state_opponent(FSMPlay.choice_action_for_first_hand)
 
         # Запускаем таймер ожидания хода от соперника.
         # Если соперник не сделал ход в течение N секунд, то игра отменяется
         ...
 
-    async def first_hand(self, callback: CallbackQuery) -> None:
+    async def start_second_hand_round(self) -> None:
+        # Оба игрока готовы
+        await self.answer_user(LEXICON['opponent_ready_to_play'])
+
+        # Создаем клавиатуру для выбора действия у второй руки
+        game_kb = create_inline_kb(*LEXICON_MOVES.keys())
+        await self.answer_user(LEXICON['invitation_choose_action'],
+                               reply_markup=game_kb)
+
+        await self.set_state_user(FSMPlay.choice_action_for_second_hand)
+        await self.set_state_opponent(FSMPlay.choice_action_for_second_hand)
+
+        # Запускаем таймер ожидания хода от соперника.
+        # Если соперник не сделал ход в течение N секунд, то игра отменяется
+        ...
+
+    async def start_hand_choice_round(self) -> None:
+        # Оба игрока готовы
+        await self.answer_user(LEXICON['opponent_ready_to_play'])
+
+        # Создаем клавиатуру для выбора оставшейся руки
+        game_kb = create_inline_kb('first_hand', 'second_hand')
+        await self.answer_user(LEXICON['invitation_choose_action'],
+                               reply_markup=game_kb)
+        await self.set_state_user(FSMPlay.choice_hand)
+        await self.set_state_opponent(FSMPlay.choice_hand)
+
+        # Запускаем таймер ожидания хода от соперника.
+        # Если соперник не сделал ход в течение N секунд, то игра отменяется
+        ...
+
+    async def process_first_hand(self, callback: CallbackQuery) -> None:
+        '''Обработка хода первой руки'''
         # Отпровляем сообщение сопернику о том, что игрок сделал ход
         await self.answer_opponent(LEXICON['opponent_made_move'])
         # Отправляем сообщение пользователю о том, что он сделал ход
@@ -84,13 +98,9 @@ class ConnectionManager:
         await self.update_date_user(first_hand=first_hand)
         await self.answer_user(text=f'{LEXICON['user_choice']} '
                                     f'- {LEXICON[first_hand]}')
-        await self.set_state_user(FSMPlay.choice_action_for_second_hand)
-        # Создаем клавиатуру для выбора действия у второй руки
-        game_kb = create_inline_kb(*LEXICON_MOVES.keys())
-        await self.answer_user(LEXICON['invitation_choose_action'],
-                               reply_markup=game_kb)
 
-    async def second_hand(self, callback: CallbackQuery) -> None:
+    async def process_second_hand(self, callback: CallbackQuery) -> None:
+        '''Обработка хода второй руки'''
         # Отпровляем сообщение сопернику о том, что игрок сделал ход
         await self.answer_opponent(LEXICON['opponent_made_move'])
         # Отправляем сообщение пользователю о том, что он сделал ход
@@ -98,11 +108,6 @@ class ConnectionManager:
         await self.update_date_user(second_hand=second_hand)
         await self.answer_user(text=f'{LEXICON['user_choice']} '
                                     f'- {LEXICON[second_hand]}')
-        # Создаем клавиатуру для выбора оставшейся руки
-        game_kb = create_inline_kb('first_hand', 'second_hand')
-        await self.answer_user(LEXICON['invitation_choose_action'],
-                               reply_markup=game_kb)
-        await self.set_state_user(FSMPlay.choice_hand)
 
     async def clear_states(self) -> None:
         '''Очистка состояний игроков'''
@@ -152,3 +157,17 @@ class ConnectionManager:
             self.wait_opponent_consent()
         )
         await asyncio.wait_for(wait_opponent_consent_task, timeout=timeout)
+
+
+async def get_opponent_id(callback: CallbackQuery,
+                          state: FSMContext) -> int:
+    message: Message = callback.message  # type: ignore[assignment]
+    user_data = await state.get_data()
+
+    try:
+        opponent_id: int = user_data['opponent_id']
+        return opponent_id
+    except KeyError:
+        await message.answer(text=LEXICON['opponent_not_found'])
+        await state.clear()
+        raise KeyError
