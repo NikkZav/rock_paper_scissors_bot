@@ -28,6 +28,8 @@ LEXICON_BUTTONS: dict[str, str] = {
     'matchmaking': 'Подбор случайного соперника',
     'start_game': 'Начать игру',
     'refuse': 'Отказаться',
+    'first_hand': 'Первая рука',
+    'second_hand': 'Вторая рука',
 }
 
 LEXICON_ANSWERS: dict[str, str] = {
@@ -51,6 +53,7 @@ LEXICON_ANSWERS: dict[str, str] = {
     'opponent_ready_to_play': 'Соперник готов к игре',
     'too_long_waiting_response': 'Слишком долгое ожидание ответа соперника',
     'game_cancelled': 'Игра отменена',
+    'opponent_made_move': 'Соперник уже сделал свой ход! Скорее выбирай!',
 }
 
 LEXICON_WARNINGS: dict[str, str] = {
