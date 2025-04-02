@@ -74,6 +74,22 @@ class GameMaster:
             await self.send_message(winner_opponent_id, LEXICON['you_lose'])
         await self._set_state(winner_state, FSMPlay.winner)
 
+    async def show_players_hands(self) -> None:
+        user_data = await self.get_data_user()
+        opponent_data = await self.get_data_opponent()
+        await self.answer_user(
+            LEXICON['your_hands'].format(
+                hand1=LEXICON[user_data['first_hand']],
+                hand2=LEXICON[user_data['second_hand']]
+            )
+        )
+        await self.answer_user(
+            LEXICON['opponent_hands'].format(
+                hand1=LEXICON[opponent_data['first_hand']],
+                hand2=LEXICON[opponent_data['second_hand']]
+            )
+        )
+
     async def wait_for_hands_completion(self, timeout: int = 10,
                                         check_interval: float = 0.5
                                         ) -> str | None:
@@ -125,6 +141,7 @@ class GameMaster:
         if result == "both":
             # Оба игрока выбрали два хода — переходим к следующему этапу игры
             # Например, запуск выбора оставшейся руки:
+            await self.show_players_hands()
             await self.start_hand_choice_round()
         elif result == "user":
             if self.message.from_user:
@@ -158,10 +175,6 @@ class GameMaster:
                                reply_markup=game_kb)
         await self.set_state_user(FSMPlay.choice_hand)
         await self.set_state_opponent(FSMPlay.choice_hand)
-
-        # Запускаем таймер ожидания хода от соперника.
-        # Если соперник не сделал ход в течение N секунд, то игра отменяется
-        ...
 
     async def process_first_hand(self, callback: CallbackQuery) -> None:
         '''Обработка хода первой руки'''

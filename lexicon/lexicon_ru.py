@@ -57,6 +57,8 @@ LEXICON_ANSWERS: dict[str, str] = {
     'opponent_made_move': 'Соперник уже сделал свой ход! Скорее выбирай!',
     'you_win': 'Ты выиграл!',
     'you_lose': 'Ты проиграл!',
+    'your_hands': 'Твои ходы: {hand1} и {hand2}',
+    'opponent_hands': 'Ходы соперника: {hand1} и {hand2}',
 }
 
 LEXICON_WARNINGS: dict[str, str] = {
