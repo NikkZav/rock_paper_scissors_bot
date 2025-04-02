@@ -49,11 +49,14 @@ LEXICON_ANSWERS: dict[str, str] = {
                       'бросает тебе вызов! '
                       'Готов принять его и сразиться с ним?',
     'waiting_opponent': 'Ждем пока соперник примет игру...',
-    'opponent_refused': 'Соперник отказался от игры',
+    'opponent_cancelled_game': 'Соперник отказался от игры',
     'opponent_ready_to_play': 'Соперник готов к игре',
     'too_long_waiting_response': 'Слишком долгое ожидание ответа соперника',
+    'you_are_too_long': 'Ты слишком долго не отвечаешь',
     'game_cancelled': 'Игра отменена',
     'opponent_made_move': 'Соперник уже сделал свой ход! Скорее выбирай!',
+    'you_win': 'Ты выиграл!',
+    'you_lose': 'Ты проиграл!',
 }
 
 LEXICON_WARNINGS: dict[str, str] = {

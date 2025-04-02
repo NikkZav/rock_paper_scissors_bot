@@ -14,11 +14,13 @@ class OnlineUserMiddleware(BaseMiddleware):
         def extract_user_id(update: Update) -> Optional[int]:
             # Извлекаем событие из Update
             if update.message:
-                return update.message.from_user.id
+                if update.message.from_user:
+                    return update.message.from_user.id
             elif update.callback_query:
                 return update.callback_query.from_user.id
             elif update.poll_answer:
-                return update.poll_answer.user.id
+                if update.poll_answer.user:
+                    return update.poll_answer.user.id
             # Добавьте обработку других типов событий при необходимости
             return None
 

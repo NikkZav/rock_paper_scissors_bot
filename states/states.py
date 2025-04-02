@@ -19,3 +19,4 @@ class FSMPlay(StatesGroup):
     choice_action_for_first_hand = State()
     choice_action_for_second_hand = State()
     choice_hand = State()
+    winner = State()

@@ -30,9 +30,9 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
         # Соперник согласился на игру, запускаем первый раунд игры
         await game_master.start_first_hand_round()
     except asyncio.CancelledError:  # Соперник отменил игру
-        await game_master.react_to_opponent_cancellation()
+        pass  # Ничего не делаем, так как игра уже завершена противником
     except asyncio.TimeoutError:  # Слишком долго ждем ответа от соперника
-        await game_master.react_to_opponent_timeout()
+        await game_master.react_to_timeout(who_timeout="opponent")
 
 
 @router.callback_query(F.data == "refuse",
@@ -44,14 +44,13 @@ async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
         return  # Если соперник не найден, выходим из функции
 
     game_master = GameMaster(callback, state, opponent_id)
-    await game_master.clear_states()  # Очищаем состояния игроков
-    await game_master.send_game_end()  # Сообщаем им об отмене игры
+    # Пользователь отказался от игры
+    await game_master.react_to_cancellation(who_cancelled="user")
 
 
 @router.callback_query(F.data.in_(LEXICON_MOVES.keys()),
                        StateFilter(FSMPlay.choice_action_for_first_hand))
-async def process_first_hand_handler(callback: CallbackQuery,
-                                     state: FSMContext):
+async def process_first_hand(callback: CallbackQuery, state: FSMContext):
     try:
         opponent_id = await get_opponent_id(callback, state)
     except KeyError:
@@ -66,8 +65,7 @@ async def process_first_hand_handler(callback: CallbackQuery,
 
 @router.callback_query(F.data.in_(LEXICON_MOVES.keys()),
                        StateFilter(FSMPlay.choice_action_for_second_hand))
-async def process_second_hand_handler(callback: CallbackQuery,
-                                      state: FSMContext):
+async def process_second_hand(callback: CallbackQuery, state: FSMContext):
     try:
         opponent_id = await get_opponent_id(callback, state)
     except KeyError:
@@ -76,20 +74,22 @@ async def process_second_hand_handler(callback: CallbackQuery,
     game_master = GameMaster(callback, state, opponent_id)
     # Обработка второго хода
     await game_master.process_second_hand(callback)
-    # Запускаем третий раунд (выбор оставшейся руки)
-    await game_master.start_hand_choice_round()
+
+    # А третий раунд запускается только после того,
+    # как оба игрока сделают ходы (либо конец игры с выводом победителя)
+    # Вся логика таймера в .game_managers: GameMaster.wait_for_hands_completion
 
 
-# Этот хэндлер срабатывает на любую из игровых кнопок
-@router.callback_query(F.data.in_(LEXICON_MOVES.keys()))
-async def process_game_button(callback: CallbackQuery):
-    message: Message = callback.message  # type: ignore[assignment]
-    user_choice: str = callback.data  # type: ignore[assignment]
+# # Этот хэндлер срабатывает на любую из игровых кнопок
+# @router.callback_query(F.data.in_(LEXICON_MOVES.keys()))
+# async def process_game_button(callback: CallbackQuery):
+#     message: Message = callback.message  # type: ignore[assignment]
+#     user_choice: str = callback.data  # type: ignore[assignment]
 
-    bot_choice = get_bot_choice()
-    await message.answer(text=f'{LEXICON["user_choice"]} '
-                              f'- {LEXICON[user_choice]}')
-    await message.answer(text=f'{LEXICON["bot_choice"]} '
-                              f'- {LEXICON[bot_choice]}')
-    winner = get_winner(user_choice, bot_choice)  # type: ignore[arg-type]
-    await message.answer(text=LEXICON[winner], reply_markup=yes_no_kb)
+#     bot_choice = get_bot_choice()
+#     await message.answer(text=f'{LEXICON["user_choice"]} '
+#                               f'- {LEXICON[user_choice]}')
+#     await message.answer(text=f'{LEXICON["bot_choice"]} '
+#                               f'- {LEXICON[bot_choice]}')
+#     winner = get_winner(user_choice, bot_choice)  # type: ignore[arg-type]
+#     await message.answer(text=LEXICON[winner], reply_markup=yes_no_kb)
