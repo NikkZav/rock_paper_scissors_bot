@@ -22,7 +22,7 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
 
     game_master = GameMaster(callback, state, opponent_id)
 
-    await game_master.update_date_user(ready_to_play=True)
+    await game_master.update_date(whom=PlayerCode.USER, ready_to_play=True)
 
     try:  # Запускаем задачу на ожидание согласия соперника (с таймаутом)
         await game_master.run_waiting_opponent_consent_task(timeout=10)

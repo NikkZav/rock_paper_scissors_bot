@@ -35,6 +35,7 @@ LEXICON_BUTTONS: dict[str, str] = {
 LEXICON_ANSWERS: dict[str, str] = {
     'other_answer': 'Извини, увы, это сообщение мне непонятно...',
     'invitation_choose_action': 'Отлично! Делай свой выбор!',
+    'invitation_choose_remaining_hand': 'Выбери руку, которую ты оставишь',
     'refused_to_play': 'Жаль...\nЕсли захочешь сыграть, просто разверни '
                        'клавиатуру и нажми кнопку "Давай!"',
     'bot_won': 'Я победил!\n\nСыграем еще?',
@@ -54,7 +55,7 @@ LEXICON_ANSWERS: dict[str, str] = {
     'too_long_waiting_response': 'Слишком долгое ожидание ответа соперника',
     'you_are_too_long': 'Ты слишком долго не отвечаешь',
     'both_are_too_long': 'Вы оба слишком долго не отвечаете, поэтому ничья!',
-    'game_cancelled': 'Игра отменена',
+    'game_finished': 'Игра завершена',
     'opponent_made_move': 'Соперник уже сделал свой ход! Скорее выбирай!',
     'you_win': 'Ты выиграл!',
     'you_lose': 'Ты проиграл!',

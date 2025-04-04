@@ -70,74 +70,89 @@ class GameMaster:
     async def send_message(self, chat_id: int, *args, **kwargs) -> None:
         await self.bot.send_message(chat_id, *args, **kwargs)
 
-    async def answer_user(self, *args, **kwargs) -> None:
-        await self.message.answer(*args, **kwargs)
+    async def answer(self, whom: PlayerCode, *args, **kwargs) -> None:
+        match whom:
+            case PlayerCode.USER:
+                await self.message.answer(*args, **kwargs)
+            case PlayerCode.OPPONENT:
+                await self.send_message(self.opponent_id, *args, **kwargs)
+            case PlayerCode.BOTH:
+                await self.message.answer(*args, **kwargs)
+                await self.send_message(self.opponent_id, *args, **kwargs)
 
-    async def answer_opponent(self, *args, **kwargs) -> None:
-        await self.send_message(self.opponent_id, *args, **kwargs)
+    async def update_date(self, whom: PlayerCode, **kwargs) -> None:
+        match whom:
+            case PlayerCode.USER:
+                await self.user_context.update_data(**kwargs)
+            case PlayerCode.OPPONENT:
+                await self.opponent_context.update_data(**kwargs)
+            case PlayerCode.BOTH:
+                await self.user_context.update_data(**kwargs)
+                await self.opponent_context.update_data(**kwargs)
 
-    async def _update_date(self, context: FSMContext, **kwargs) -> None:
-        await context.update_data(**kwargs)
+    async def get_data(self, whom: PlayerCode) -> dict:
+        match whom:
+            case PlayerCode.USER:
+                return await self.user_context.get_data()
+            case PlayerCode.OPPONENT:
+                return await self.opponent_context.get_data()
+            case _: return {}
 
-    async def update_date_user(self, **kwargs) -> None:
-        await self._update_date(self.user_context, **kwargs)
+    async def get_data_both(self) -> tuple[dict, dict]:
+        return (await self.get_data(PlayerCode.USER),
+                await self.get_data(PlayerCode.OPPONENT))
 
-    async def update_date_opponent(self, **kwargs) -> None:
-        await self._update_date(self.opponent_context, **kwargs)
+    async def set_state(self, whom: PlayerCode, state_type: StateType) -> None:
+        match whom:
+            case PlayerCode.USER:
+                await self.user_context.set_state(state_type)
+            case PlayerCode.OPPONENT:
+                await self.opponent_context.set_state(state_type)
+            case PlayerCode.BOTH:
+                await self.user_context.set_state(state_type)
+                await self.opponent_context.set_state(state_type)
 
-    async def _get_data(self, context: FSMContext) -> dict:
-        return await context.get_data()
+    async def get_state(self, whom: PlayerCode) -> StateType:
+        match whom:
+            case PlayerCode.USER:
+                return await self.user_context.get_state()
+            case PlayerCode.OPPONENT:
+                return await self.opponent_context.get_state()
+            case _: return default_state
 
-    async def get_data_user(self) -> dict:
-        return await self._get_data(self.user_context)
-
-    async def get_data_opponent(self) -> dict:
-        return await self._get_data(self.opponent_context)
-
-    async def _set_state(self, context: FSMContext,
-                         state_type: StateType) -> None:
-        await context.set_state(state_type)
-
-    async def set_state_user(self, state_type: StateType) -> None:
-        await self._set_state(self.user_context, state_type)
-
-    async def set_state_opponent(self, state_type: StateType) -> None:
-        await self._set_state(self.opponent_context, state_type)
-
-    async def _get_state(self, context: FSMContext) -> StateType:
-        return await context.get_state()
-
-    async def get_state_user(self) -> StateType:
-        return await self._get_state(self.user_context)
-
-    async def get_state_opponent(self) -> StateType:
-        return await self._get_state(self.opponent_context)
+    async def get_state_both(self) -> tuple[StateType, StateType]:
+        return (await self.get_state(PlayerCode.USER),
+                await self.get_state(PlayerCode.OPPONENT))
 
     async def announce_winner(self, winner_id: int) -> None:
         await self.send_message(winner_id, LEXICON['you_win'])
         winner_context = self._get_context(winner_id)
-        winner_data = await self._get_data(winner_context)
+        winner_data = await winner_context.get_data()
         winner_opponent_id = winner_data.get('opponent_id')
         if winner_opponent_id:
             await self.send_message(winner_opponent_id, LEXICON['you_lose'])
-        await self._set_state(context=winner_context,
-                              state_type=FSMPlay.winner)
+        await winner_context.set_state(FSMPlay.winner)
 
     async def show_players_hands(self) -> None:
-        user_data = await self.get_data_user()
-        opponent_data = await self.get_data_opponent()
-        await self.answer_user(
-            LEXICON['your_hands'].format(
-                hand1=LEXICON[user_data['first_hand']],
-                hand2=LEXICON[user_data['second_hand']]
-            )
-        )
-        await self.answer_user(
-            LEXICON['opponent_hands'].format(
-                hand1=LEXICON[opponent_data['first_hand']],
-                hand2=LEXICON[opponent_data['second_hand']]
-            )
-        )
+        user_data = await self.get_data(PlayerCode.USER)
+        opponent_data = await self.get_data(PlayerCode.OPPONENT)
+        user_hands = {
+            'hand1': LEXICON[user_data['first_hand']],
+            'hand2': LEXICON[user_data['second_hand']]
+        }
+        opponent_hands = {
+            'hand1': LEXICON[opponent_data['first_hand']],
+            'hand2': LEXICON[opponent_data['second_hand']]
+        }
+        await self.answer(whom=PlayerCode.USER,
+                          text=LEXICON['your_hands'].format(**user_hands))
+        await self.answer(whom=PlayerCode.USER,
+                          text=LEXICON['opponent_hands'].format(
+                              **opponent_hands))
+        await self.answer(whom=PlayerCode.OPPONENT,
+                          text=LEXICON['your_hands'].format(**opponent_hands))
+        await self.answer(whom=PlayerCode.OPPONENT,
+                          text=LEXICON['opponent_hands'].format(**user_hands))
 
     async def wait_for_hands_completion(self, timeout: int = 10,
                                         check_interval: float = 0.5
@@ -149,8 +164,7 @@ class GameMaster:
         """
         start_time = asyncio.get_event_loop().time()
         while True:
-            user_state = await self.get_state_user()
-            opp_state = await self.get_state_opponent()
+            user_state, opp_state = await self.get_state_both()
 
             user_complete = (user_state == FSMPlay.both_hands_ready)
             opp_complete = (opp_state == FSMPlay.both_hands_ready)
@@ -174,62 +188,76 @@ class GameMaster:
         if 'wait_for_hands_completion_task' in self.session.running_tasks:
             print('--- Задача уже запущена другим игроком ---')
             return  # Если задача уже запущена, выходим из функции
-        print('--- Задача запущена ---')
+        print('--- Задача не запущена ---')
         wait_for_hands_completion_task = asyncio.create_task(
             self.wait_for_hands_completion(timeout, check_interval)
         )
+        print('--- Задача создана ---')
         self.session.running_tasks[
             'wait_for_hands_completion_task'
         ] = wait_for_hands_completion_task
+        print('--- Задача запоминиана в сессии ---')
         players_ready = await wait_for_hands_completion_task
+        print('--- Задача завершена ---')
+        self.session.running_tasks.pop('wait_for_hands_completion_task')
         match players_ready:
             case PlayerCode.BOTH:  # Оба игрока выбрали обе руки вовремя
                 await self.show_players_hands()
                 await self.start_hand_choice_round()
+                return  # Игра продолжается
             case PlayerCode.USER:  # Пользователь успел, а соперник не нет
+                await self.answer(whom=PlayerCode.OPPONENT,
+                                  text=LEXICON['you_are_too_long'])
                 await self.announce_winner(winner_id=self.user_id)
             case PlayerCode.OPPONENT:  # Соперник успел, а пользователь нет
+                await self.answer(whom=PlayerCode.USER,
+                                  text=LEXICON['you_are_too_long'])
                 await self.announce_winner(winner_id=self.opponent_id)
             case PlayerCode.NOBODY:  # Никто не успел — игра отменяется
-                await self.answer_user(LEXICON['both_are_too_long'])
-                await self.finish_game()
+                await self.answer(whom=PlayerCode.BOTH,
+                                  text=LEXICON['both_are_too_long'])
+        await self.finish_game()  # Игра завершается
 
     async def start_first_hand_round(self) -> None:
         # Создаем клавиатуру для выбора действия у первой руки
         game_kb = create_inline_kb(*LEXICON_MOVES.keys())
-        await self.answer_user(LEXICON['invitation_choose_action'],
-                               reply_markup=game_kb)
-        await self.set_state_user(FSMPlay.choice_action_for_first_hand)
+        await self.answer(whom=PlayerCode.USER,
+                          text=LEXICON['invitation_choose_action'],
+                          reply_markup=game_kb)
+        await self.set_state(whom=PlayerCode.USER,
+                             state_type=FSMPlay.choice_action_for_first_hand)
 
     async def start_second_hand_round(self) -> None:
         # Создаем клавиатуру для выбора действия у второй руки
         game_kb = create_inline_kb(*LEXICON_MOVES.keys())
-        await self.answer_user(LEXICON['invitation_choose_action'],
-                               reply_markup=game_kb)
-
-        await self.set_state_user(FSMPlay.choice_action_for_second_hand)
+        await self.answer(whom=PlayerCode.USER,
+                          text=LEXICON['invitation_choose_action'],
+                          reply_markup=game_kb)
+        await self.set_state(whom=PlayerCode.USER,
+                             state_type=FSMPlay.choice_action_for_second_hand)
 
     async def start_hand_choice_round(self) -> None:
-        # Оба игрока готовы
-        await self.answer_user(LEXICON['opponent_ready_to_play'])
-
         # Создаем клавиатуру для выбора оставшейся руки
         game_kb = create_inline_kb('first_hand', 'second_hand')
-        await self.answer_user(LEXICON['invitation_choose_action'],
-                               reply_markup=game_kb)
-        await self.set_state_user(FSMPlay.choice_hand)
-        await self.set_state_opponent(FSMPlay.choice_hand)
+        await self.answer(whom=PlayerCode.BOTH,
+                          text=LEXICON['invitation_choose_remaining_hand'],
+                          reply_markup=game_kb)
+        await self.set_state(whom=PlayerCode.BOTH,
+                             state_type=FSMPlay.choice_hand)
 
     async def process_first_hand(self) -> None:
         '''Обработка хода первой руки'''
         first_hand: str = str(self.callback.data)
-        await self.update_date_user(first_hand=first_hand)
+        await self.update_date(whom=PlayerCode.USER,
+                               first_hand=first_hand)
 
     async def process_second_hand(self) -> None:
         '''Обработка хода второй руки'''
         second_hand: str = str(self.callback.data)
-        await self.update_date_user(second_hand=second_hand)
-        await self.set_state_user(FSMPlay.both_hands_ready)
+        await self.update_date(whom=PlayerCode.USER,
+                               second_hand=second_hand)
+        await self.set_state(whom=PlayerCode.USER,
+                             state_type=FSMPlay.both_hands_ready)
 
     async def clear_states(self) -> None:
         '''Очистка состояний игроков'''
@@ -251,29 +279,37 @@ class GameMaster:
                 return  # Значит игра уже была завершена оппонентом
 
             # Завершаем игру для обоих игроков (т.к. она еще не завершена)
-            await self.answer_opponent(LEXICON['game_cancelled'])
-            await self.answer_user(LEXICON['game_cancelled'])
+            await self.answer(whom=PlayerCode.BOTH,
+                              text=LEXICON['game_finished'])
             await self.clear_states()
             await self.session.delete()
+            print(f'--- GameSession sessions: {GameSession.sessions} ---')
             print('--- Game finished ---')
 
     async def react_to_cancellation(self, who_cancelled: PlayerCode) -> None:
         '''Реакция на отмену игры'''
         match who_cancelled:
             case PlayerCode.OPPONENT:
-                await self.answer_user(LEXICON['opponent_cancelled_game'])
+                await self.answer(whom=PlayerCode.USER,
+                                  text=LEXICON['opponent_cancelled_game'])
             case PlayerCode.USER:
-                await self.answer_opponent(LEXICON['opponent_cancelled_game'])
+                await self.answer(whom=PlayerCode.OPPONENT,
+                                  text=LEXICON['opponent_cancelled_game'])
         await self.finish_game()
 
     async def react_to_timeout(self, who_timeout: PlayerCode) -> None:
         '''Реакция на таймаут'''
-        if who_timeout == PlayerCode.OPPONENT:
-            await self.answer_user(LEXICON['too_long_waiting_response'])
-            await self.answer_opponent(LEXICON['you_are_too_long'])
-        elif who_timeout == PlayerCode.USER:
-            await self.answer_opponent(LEXICON['too_long_waiting_response'])
-            await self.answer_user(LEXICON['you_are_too_long'])
+        match who_timeout:
+            case PlayerCode.OPPONENT:
+                await self.answer(whom=PlayerCode.USER,
+                                  text=LEXICON['too_long_waiting_response'])
+                await self.answer(whom=PlayerCode.OPPONENT,
+                                  text=LEXICON['you_are_too_long'])
+            case PlayerCode.USER:
+                await self.answer(whom=PlayerCode.OPPONENT,
+                                  text=LEXICON['too_long_waiting_response'])
+                await self.answer(whom=PlayerCode.USER,
+                                  text=LEXICON['you_are_too_long'])
         await self.finish_game()
 
     async def wait_opponent_consent(self, send_every_n_seconds: int = 2,
@@ -282,7 +318,7 @@ class GameMaster:
         steps: int = 0
         sleep_time = 1 / update_frequency
         while True:
-            opponent_data = await self.get_data_opponent()
+            opponent_data = await self.get_data(PlayerCode.OPPONENT)
             decision: bool | None = opponent_data.get('ready_to_play')
 
             # Проверяем не отменил ли соперник игру
