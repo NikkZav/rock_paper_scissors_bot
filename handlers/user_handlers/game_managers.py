@@ -23,6 +23,7 @@ class GameSession:
         self.session_id = session_id
         self.lock = asyncio.Lock()  # Блокировка для атомарных операций
         self.__class__.sessions[session_id] = self
+        self.running_tasks: dict[str, asyncio.Task] = {}
 
     async def delete(self) -> None:
         del self.__class__.sessions[self.session_id]
@@ -169,8 +170,18 @@ class GameMaster:
     async def run_delayed_start_hand_choice_round_task(
             self, timeout: int = 10,
             check_interval: float = 0.1) -> None:
-        players_ready = await self.wait_for_hands_completion(timeout,
-                                                             check_interval)
+        """Запускает задачу на ожидание выбора хода соперником"""
+        if 'wait_for_hands_completion_task' in self.session.running_tasks:
+            print('--- Задача уже запущена другим игроком ---')
+            return  # Если задача уже запущена, выходим из функции
+        print('--- Задача запущена ---')
+        wait_for_hands_completion_task = asyncio.create_task(
+            self.wait_for_hands_completion(timeout, check_interval)
+        )
+        self.session.running_tasks[
+            'wait_for_hands_completion_task'
+        ] = wait_for_hands_completion_task
+        players_ready = await wait_for_hands_completion_task
         match players_ready:
             case PlayerCode.BOTH:  # Оба игрока выбрали обе руки вовремя
                 await self.show_players_hands()
