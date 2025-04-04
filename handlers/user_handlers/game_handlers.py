@@ -5,7 +5,7 @@ from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from states.states import FSMPlay
-from .game_managers import GameMaster, get_opponent_id
+from .game_managers import GameMaster
 from utils.enums import PlayerCode
 
 
@@ -16,7 +16,7 @@ router = Router()
                        StateFilter(FSMPlay.waiting_game_start))
 async def process_start_game(callback: CallbackQuery, state: FSMContext):
     try:
-        opponent_id = await get_opponent_id(callback, state)
+        opponent_id = await GameMaster.get_opponent_id(callback, state)
     except KeyError:
         return  # Если соперник не найден, выходим из функции
 
@@ -26,19 +26,24 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
 
     try:  # Запускаем задачу на ожидание согласия соперника (с таймаутом)
         await game_master.run_waiting_opponent_consent_task(timeout=10)
-        # Соперник согласился на игру, запускаем первый раунд игры
-        await game_master.start_first_hand_round()
     except asyncio.CancelledError:  # Соперник отменил игру
         pass  # Ничего не делаем, так как игра уже завершена противником
     except asyncio.TimeoutError:  # Слишком долго ждем ответа от соперника
         await game_master.react_to_timeout(who_timeout=PlayerCode.OPPONENT)
+    else:  # Соперник согласился на игру, запускаем первый раунд игры
+        await game_master.start_first_hand_round()
+        # Паралелльно запускаем задачу ожидающую выбора обеих рук (с таймаутом)
+        # Если игрок не успевает сделать выбор, то он проигрывает раунд
+        # Если оба игрока сделали выбор, то запускаем раунд выбора руки
+        print('--- Запускаем задачу ожидающую выбора обеих рук ---')
+        await game_master.run_delayed_start_hand_choice_round_task(timeout=10)
 
 
 @router.callback_query(F.data == "refuse",
                        StateFilter(FSMPlay.waiting_game_start))
 async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
     try:
-        opponent_id = await get_opponent_id(callback, state)
+        opponent_id = await GameMaster.get_opponent_id(callback, state)
     except KeyError:
         return  # Если соперник не найден, выходим из функции
 
@@ -51,7 +56,7 @@ async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
                        StateFilter(FSMPlay.choice_action_for_first_hand))
 async def process_first_hand(callback: CallbackQuery, state: FSMContext):
     try:
-        opponent_id = await get_opponent_id(callback, state)
+        opponent_id = await GameMaster.get_opponent_id(callback, state)
     except KeyError:
         return  # Если соперник не найден, выходим из функции
 
@@ -66,7 +71,7 @@ async def process_first_hand(callback: CallbackQuery, state: FSMContext):
                        StateFilter(FSMPlay.choice_action_for_second_hand))
 async def process_second_hand(callback: CallbackQuery, state: FSMContext):
     try:
-        opponent_id = await get_opponent_id(callback, state)
+        opponent_id = await GameMaster.get_opponent_id(callback, state)
     except KeyError:
         return  # Если соперник не найден, выходим из функции
 
@@ -77,7 +82,6 @@ async def process_second_hand(callback: CallbackQuery, state: FSMContext):
     # А третий раунд запускается автоматически только после того,
     # как оба игрока сделают ходы (либо конец игры с выводом победителя)
     # Вся логика таймера в .game_managers: GameMaster.wait_for_hands_completion
-
 
 # # Этот хэндлер срабатывает на любую из игровых кнопок
 # @router.callback_query(F.data.in_(LEXICON_MOVES.keys()))

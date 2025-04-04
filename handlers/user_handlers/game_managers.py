@@ -8,6 +8,30 @@ from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
 from keyboards.keyboards import create_inline_kb
 from states.states import FSMPlay
 from utils.enums import PlayerCode
+from typing import TypeAlias
+
+
+class GameSession:
+
+    # Уникальный идентификатор сессии (tuple из двух id)
+    SessionId: TypeAlias = tuple[int, int]
+
+    # Хранилище сеансов по уникальному идентификатору (tuple из двух id)
+    sessions: dict[SessionId, 'GameSession'] = {}
+
+    def __init__(self, session_id: SessionId):
+        self.session_id = session_id
+        self.lock = asyncio.Lock()  # Блокировка для атомарных операций
+        self.__class__.sessions[session_id] = self
+
+    async def delete(self) -> None:
+        del self.__class__.sessions[self.session_id]
+
+    @staticmethod
+    def generate_session_id(user_id: int, opponent_id: int) -> SessionId:
+        # Убедимся, что идентификатор будет одинаков для обеих сторон
+        ids = sorted((user_id, opponent_id))
+        return (ids[0], ids[1])
 
 
 class GameMaster:
@@ -23,10 +47,16 @@ class GameMaster:
         self.opponent_id: int = opponent_id
         self.opponent_context: FSMContext = self._get_context(opponent_id)
 
+        self.session_id = GameSession.generate_session_id(self.user_id,
+                                                          self.opponent_id)
+        # Получаем или создаем игровую сессию
+        if session := GameSession.sessions.get(self.session_id):
+            self.session = session
+        else:  # Если сессии нет, создаем новую сессию
+            self.session = GameSession(session_id=self.session_id)
+
     def _get_user_id(self) -> int:
-        if self.message.from_user is None:
-            raise ValueError("from_user is None")
-        return self.message.from_user.id
+        return self.callback.from_user.id
 
     def _get_context(self, user_id: int) -> FSMContext:
         user_key = StorageKey(
@@ -113,8 +143,8 @@ class GameMaster:
                                         ) -> PlayerCode:
         """
         Ожидает, пока оба игрока выберут два хода (first_hand и second_hand)
-        в течение timeout секунд. Если оба выбрали – возвращает "both".
-        Если только один – возвращает "user" или "opponent" того, кто успел.
+        в течение timeout секунд. Если оба выбрали – возвращает BOTH.
+        Если только один – возвращает USER или OPPONENT того, кто успел.
         """
         start_time = asyncio.get_event_loop().time()
         while True:
@@ -125,7 +155,6 @@ class GameMaster:
             opp_complete = (opp_state == FSMPlay.both_hands_ready)
 
             if user_complete and opp_complete:
-                print('--- Оба игрока выбрали руки вовремя ---')
                 return PlayerCode.BOTH
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout:
@@ -134,7 +163,6 @@ class GameMaster:
                 elif opp_complete and not user_complete:
                     return PlayerCode.OPPONENT
                 else:
-                    print('--- Никто не успел выбрать руки вовремя ---')
                     return PlayerCode.NOBODY
             await asyncio.sleep(check_interval)
 
@@ -161,11 +189,6 @@ class GameMaster:
         await self.answer_user(LEXICON['invitation_choose_action'],
                                reply_markup=game_kb)
         await self.set_state_user(FSMPlay.choice_action_for_first_hand)
-
-        # Паралелльно запускаем задачу ожидающую выбора обеих рук (с таймаутом)
-        # Если игрок не успевает сделать выбор, то он проигрывает раунд
-        # Если оба игрока сделали выбор, то запускаем раунд выбора руки
-        await self.run_delayed_start_hand_choice_round_task(timeout=10)
 
     async def start_second_hand_round(self) -> None:
         # Создаем клавиатуру для выбора действия у второй руки
@@ -203,20 +226,33 @@ class GameMaster:
         await self.opponent_context.clear()
 
     async def finish_game(self) -> None:
-        '''Завершение игры'''
-        opp_finish_game = await self.get_state_opponent() == default_state
-        user_finish_game = await self.get_state_user() == default_state
-        if not opp_finish_game and not user_finish_game:
+        """Завершает игру атомарно"""
+        print('--- Start finish_game ---')
+        print(f'--- GameMaster session: {self.session} ---')
+        print(f'--- GameMaster session_id: {self.session_id} ---')
+        print(f'--- GameSession sessions: {GameSession.sessions} ---')
+        print(f'--- GameMaster session.lock: {self.session.lock} ---')
+        async with self.session.lock:
+            print('--- Lock acquired ---')
+            # Проверяем, что игра еще не была завершена
+            if self.session_id not in GameSession.sessions:
+                print('--- Game already finished ---')
+                return  # Значит игра уже была завершена оппонентом
+
+            # Завершаем игру для обоих игроков (т.к. она еще не завершена)
             await self.answer_opponent(LEXICON['game_cancelled'])
             await self.answer_user(LEXICON['game_cancelled'])
             await self.clear_states()
+            await self.session.delete()
+            print('--- Game finished ---')
 
     async def react_to_cancellation(self, who_cancelled: PlayerCode) -> None:
         '''Реакция на отмену игры'''
-        if who_cancelled == PlayerCode.OPPONENT:
-            await self.answer_user(LEXICON['opponent_cancelled_game'])
-        elif who_cancelled == PlayerCode.USER:
-            await self.answer_opponent(LEXICON['opponent_cancelled_game'])
+        match who_cancelled:
+            case PlayerCode.OPPONENT:
+                await self.answer_user(LEXICON['opponent_cancelled_game'])
+            case PlayerCode.USER:
+                await self.answer_opponent(LEXICON['opponent_cancelled_game'])
         await self.finish_game()
 
     async def react_to_timeout(self, who_timeout: PlayerCode) -> None:
@@ -258,16 +294,16 @@ class GameMaster:
         )
         await asyncio.wait_for(wait_opponent_consent_task, timeout=timeout)
 
+    @staticmethod
+    async def get_opponent_id(callback: CallbackQuery,
+                              context: FSMContext) -> int:
+        message: Message = callback.message  # type: ignore[assignment]
+        user_data = await context.get_data()
 
-async def get_opponent_id(callback: CallbackQuery,
-                          context: FSMContext) -> int:
-    message: Message = callback.message  # type: ignore[assignment]
-    user_data = await context.get_data()
-
-    try:
-        opponent_id: int = user_data['opponent_id']
-        return opponent_id
-    except KeyError:
-        await message.answer(text=LEXICON['opponent_not_found'])
-        await context.clear()
-        raise KeyError
+        try:
+            opponent_id: int = user_data['opponent_id']
+            return opponent_id
+        except KeyError:
+            await message.answer(text=LEXICON['opponent_not_found'])
+            await context.clear()
+            raise KeyError
