@@ -53,6 +53,7 @@ LEXICON_ANSWERS: dict[str, str] = {
     'opponent_ready_to_play': 'Соперник готов к игре',
     'too_long_waiting_response': 'Слишком долгое ожидание ответа соперника',
     'you_are_too_long': 'Ты слишком долго не отвечаешь',
+    'both_are_too_long': 'Вы оба слишком долго не отвечаете, поэтому ничья!',
     'game_cancelled': 'Игра отменена',
     'opponent_made_move': 'Соперник уже сделал свой ход! Скорее выбирай!',
     'you_win': 'Ты выиграл!',

@@ -18,5 +18,7 @@ class FSMPlay(StatesGroup):
     waiting_game_start = State()
     choice_action_for_first_hand = State()
     choice_action_for_second_hand = State()
+    both_hands_ready = State()
     choice_hand = State()
     winner = State()
+    loser = State()

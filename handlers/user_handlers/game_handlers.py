@@ -1,13 +1,12 @@
 import asyncio
 from aiogram import F, Router
-from aiogram.types import Message, CallbackQuery
-from keyboards.keyboards import yes_no_kb
+from aiogram.types import CallbackQuery
 from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
-from services.services import get_bot_choice, get_winner
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
 from states.states import FSMPlay
 from .game_managers import GameMaster, get_opponent_id
+from utils.enums import PlayerCode
 
 
 router = Router()
@@ -32,7 +31,7 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
     except asyncio.CancelledError:  # Соперник отменил игру
         pass  # Ничего не делаем, так как игра уже завершена противником
     except asyncio.TimeoutError:  # Слишком долго ждем ответа от соперника
-        await game_master.react_to_timeout(who_timeout="opponent")
+        await game_master.react_to_timeout(who_timeout=PlayerCode.OPPONENT)
 
 
 @router.callback_query(F.data == "refuse",
@@ -45,7 +44,7 @@ async def process_refuse_game(callback: CallbackQuery, state: FSMContext):
 
     game_master = GameMaster(callback, state, opponent_id)
     # Пользователь отказался от игры
-    await game_master.react_to_cancellation(who_cancelled="user")
+    await game_master.react_to_cancellation(who_cancelled=PlayerCode.USER)
 
 
 @router.callback_query(F.data.in_(LEXICON_MOVES.keys()),
@@ -58,7 +57,7 @@ async def process_first_hand(callback: CallbackQuery, state: FSMContext):
 
     game_master = GameMaster(callback, state, opponent_id)
     # Обработка первого хода
-    await game_master.process_first_hand(callback)
+    await game_master.process_first_hand()
     # Запускаем второй раунд (выбор действия у второй руки)
     await game_master.start_second_hand_round()
 
@@ -73,9 +72,9 @@ async def process_second_hand(callback: CallbackQuery, state: FSMContext):
 
     game_master = GameMaster(callback, state, opponent_id)
     # Обработка второго хода
-    await game_master.process_second_hand(callback)
+    await game_master.process_second_hand()
 
-    # А третий раунд запускается только после того,
+    # А третий раунд запускается автоматически только после того,
     # как оба игрока сделают ходы (либо конец игры с выводом победителя)
     # Вся логика таймера в .game_managers: GameMaster.wait_for_hands_completion
 
