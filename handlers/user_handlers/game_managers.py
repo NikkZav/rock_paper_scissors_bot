@@ -25,6 +25,11 @@ class GameSession:
         self.__class__.sessions[session_id] = self
         self.running_tasks: dict[str, asyncio.Task] = {}
 
+    def kill_task(self, task_name: str) -> None:
+        if task := self.running_tasks.get(task_name):
+            task.cancel()
+            del self.running_tasks[task_name]
+
     async def delete(self) -> None:
         del self.__class__.sessions[self.session_id]
 
@@ -155,7 +160,7 @@ class GameMaster:
                           text=LEXICON['opponent_hands'].format(**user_hands))
 
     async def wait_for_hands_completion(self, timeout: int = 10,
-                                        check_interval: float = 0.5
+                                        check_interval: float = 0.1
                                         ) -> PlayerCode:
         """
         Ожидает, пока оба игрока выберут два хода (first_hand и second_hand)
@@ -171,6 +176,7 @@ class GameMaster:
 
             if user_complete and opp_complete:
                 return PlayerCode.BOTH
+
             elapsed = asyncio.get_event_loop().time() - start_time
             if elapsed >= timeout:
                 if user_complete and not opp_complete:
@@ -199,7 +205,7 @@ class GameMaster:
         print('--- Задача запоминиана в сессии ---')
         players_ready = await wait_for_hands_completion_task
         print('--- Задача завершена ---')
-        self.session.running_tasks.pop('wait_for_hands_completion_task')
+        self.session.kill_task('wait_for_hands_completion_task')
         match players_ready:
             case PlayerCode.BOTH:  # Оба игрока выбрали обе руки вовремя
                 await self.show_players_hands()
@@ -208,10 +214,14 @@ class GameMaster:
             case PlayerCode.USER:  # Пользователь успел, а соперник не нет
                 await self.answer(whom=PlayerCode.OPPONENT,
                                   text=LEXICON['you_are_too_long'])
+                await self.answer(whom=PlayerCode.USER,
+                                  text=LEXICON['opponent_is_too_long'])
                 await self.announce_winner(winner_id=self.user_id)
             case PlayerCode.OPPONENT:  # Соперник успел, а пользователь нет
                 await self.answer(whom=PlayerCode.USER,
                                   text=LEXICON['you_are_too_long'])
+                await self.answer(whom=PlayerCode.OPPONENT,
+                                  text=LEXICON['opponent_is_too_long'])
                 await self.announce_winner(winner_id=self.opponent_id)
             case PlayerCode.NOBODY:  # Никто не успел — игра отменяется
                 await self.answer(whom=PlayerCode.BOTH,
@@ -222,7 +232,7 @@ class GameMaster:
         # Создаем клавиатуру для выбора действия у первой руки
         game_kb = create_inline_kb(*LEXICON_MOVES.keys())
         await self.answer(whom=PlayerCode.USER,
-                          text=LEXICON['invitation_choose_action'],
+                          text=LEXICON['choose_action_for_first_hand'],
                           reply_markup=game_kb)
         await self.set_state(whom=PlayerCode.USER,
                              state_type=FSMPlay.choice_action_for_first_hand)
@@ -231,7 +241,7 @@ class GameMaster:
         # Создаем клавиатуру для выбора действия у второй руки
         game_kb = create_inline_kb(*LEXICON_MOVES.keys())
         await self.answer(whom=PlayerCode.USER,
-                          text=LEXICON['invitation_choose_action'],
+                          text=LEXICON['choose_action_for_second_hand'],
                           reply_markup=game_kb)
         await self.set_state(whom=PlayerCode.USER,
                              state_type=FSMPlay.choice_action_for_second_hand)
@@ -313,10 +323,12 @@ class GameMaster:
         await self.finish_game()
 
     async def wait_opponent_consent(self, send_every_n_seconds: int = 2,
-                                    update_frequency: int = 10) -> None:
+                                    check_interval: float = 0.1,
+                                    timeout: int = 10) -> None:
         """Ожидание ответа соперника с обновлениями статуса"""
         steps: int = 0
-        sleep_time = 1 / update_frequency
+        send_every_step: int = int(send_every_n_seconds / check_interval)
+        start_time: float = asyncio.get_event_loop().time()
         while True:
             opponent_data = await self.get_data(PlayerCode.OPPONENT)
             decision: bool | None = opponent_data.get('ready_to_play')
@@ -328,17 +340,27 @@ class GameMaster:
             if decision is True:  # Если соперник готов к игре
                 return  # Выходим из функции и завершаем задачу
 
-            if steps % (send_every_n_seconds * update_frequency) == 0:
-                await self.message.answer(LEXICON['waiting_opponent'])
-            await asyncio.sleep(sleep_time)
+            if steps % send_every_step == 0:
+                now_time = asyncio.get_event_loop().time()
+                left: int = timeout - int(now_time - start_time)
+                await self.message.answer(
+                    LEXICON['waiting_opponent'] + "\n" +
+                    LEXICON['seconds_left'].format(seconds=left)
+                )
+            await asyncio.sleep(check_interval)
             steps += 1
 
     async def run_waiting_opponent_consent_task(self,
                                                 timeout: int = 10) -> None:
         '''Запуск задачи на ожидание согласия соперника с таймаутом'''
         wait_opponent_consent_task = asyncio.create_task(
-            self.wait_opponent_consent()
+            self.wait_opponent_consent(timeout=timeout)
         )
+        if 'wait_opponent_consent_task' in self.session.running_tasks:
+            return  # Если задача уже запущена, то выходим из функции
+        self.session.running_tasks[
+            'wait_opponent_consent_task'
+        ] = wait_opponent_consent_task
         await asyncio.wait_for(wait_opponent_consent_task, timeout=timeout)
 
     @staticmethod

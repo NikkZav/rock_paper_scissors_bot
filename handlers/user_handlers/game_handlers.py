@@ -22,7 +22,13 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
 
     game_master = GameMaster(callback, state, opponent_id)
 
+    # Обновляем данные пользователя о готовности к игре
     await game_master.update_date(whom=PlayerCode.USER, ready_to_play=True)
+
+    # Если задача на ожидание согласия соперника уже запущена соперником, то...
+    if game_master.session.running_tasks.get('wait_opponent_consent_task'):
+        await game_master.start_first_hand_round()  # Запускаем первый раунд
+        return  # Выходим из функции, так как соперник уже запустил задачу
 
     try:  # Запускаем задачу на ожидание согласия соперника (с таймаутом)
         await game_master.run_waiting_opponent_consent_task(timeout=10)
@@ -35,8 +41,9 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
         # Паралелльно запускаем задачу ожидающую выбора обеих рук (с таймаутом)
         # Если игрок не успевает сделать выбор, то он проигрывает раунд
         # Если оба игрока сделали выбор, то запускаем раунд выбора руки
-        print('--- Запускаем задачу ожидающую выбора обеих рук ---')
         await game_master.run_delayed_start_hand_choice_round_task(timeout=10)
+    finally:  # Убиваем задачу ожидания согласия соперника, если она не умерла
+        game_master.session.kill_task('wait_opponent_consent_task')
 
 
 @router.callback_query(F.data == "refuse",
@@ -82,6 +89,9 @@ async def process_second_hand(callback: CallbackQuery, state: FSMContext):
     # А третий раунд запускается автоматически только после того,
     # как оба игрока сделают ходы (либо конец игры с выводом победителя)
     # Вся логика таймера в .game_managers: GameMaster.wait_for_hands_completion
+
+
+
 
 # # Этот хэндлер срабатывает на любую из игровых кнопок
 # @router.callback_query(F.data.in_(LEXICON_MOVES.keys()))
