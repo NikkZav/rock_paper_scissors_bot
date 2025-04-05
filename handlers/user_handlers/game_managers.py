@@ -72,18 +72,21 @@ class GameMaster:
         )
         return FSMContext(storage=self.user_context.storage, key=user_key)
 
-    async def send_message(self, chat_id: int, *args, **kwargs) -> None:
-        await self.bot.send_message(chat_id, *args, **kwargs)
+    async def send_message(self, chat_id: int, *args, **kwargs) -> Message:
+        return await self.bot.send_message(chat_id, *args, **kwargs)
 
-    async def answer(self, whom: PlayerCode, *args, **kwargs) -> None:
+    async def answer(self, whom: PlayerCode, *args, **kwargs) -> int:
         match whom:
             case PlayerCode.USER:
-                await self.message.answer(*args, **kwargs)
+                message = await self.message.answer(*args, **kwargs)
             case PlayerCode.OPPONENT:
-                await self.send_message(self.opponent_id, *args, **kwargs)
+                message = await self.send_message(
+                    self.opponent_id, *args, **kwargs)
             case PlayerCode.BOTH:
-                await self.message.answer(*args, **kwargs)
-                await self.send_message(self.opponent_id, *args, **kwargs)
+                message = await self.message.answer(*args, **kwargs)
+                message = await self.send_message(
+                    self.opponent_id, *args, **kwargs)
+        return message.message_id
 
     async def update_date(self, whom: PlayerCode, **kwargs) -> None:
         match whom:
@@ -128,6 +131,28 @@ class GameMaster:
     async def get_state_both(self) -> tuple[StateType, StateType]:
         return (await self.get_state(PlayerCode.USER),
                 await self.get_state(PlayerCode.OPPONENT))
+
+    async def delete_message(self, whom: PlayerCode,
+                             key: str = 'message_id') -> None:
+        match whom:
+            case PlayerCode.USER:
+                whom_chat_id = ((PlayerCode.USER, self.user_id),)
+            case PlayerCode.OPPONENT:
+                whom_chat_id = ((PlayerCode.OPPONENT, self.opponent_id),)
+            case PlayerCode.BOTH:
+                whom_chat_id: tuple[tuple[PlayerCode, int]] = (
+                    (PlayerCode.USER, self.user_id),
+                    (PlayerCode.OPPONENT, self.opponent_id))
+        # Удаляем сообщение
+        for whom, chat_id in whom_chat_id:
+            message_id = (
+                await self.get_data(whom=whom)
+            ).get(key)
+            await self.bot.delete_message(
+                chat_id=chat_id,
+                message_id=message_id if type(message_id) is int else 0
+            )
+            await self.update_date(whom=whom, message_edited_id=None)
 
     async def announce_winner(self, winner_id: int) -> None:
         await self.send_message(winner_id, LEXICON['you_win'])
@@ -194,17 +219,13 @@ class GameMaster:
         if 'wait_for_hands_completion_task' in self.session.running_tasks:
             print('--- Задача уже запущена другим игроком ---')
             return  # Если задача уже запущена, выходим из функции
-        print('--- Задача не запущена ---')
         wait_for_hands_completion_task = asyncio.create_task(
             self.wait_for_hands_completion(timeout, check_interval)
         )
-        print('--- Задача создана ---')
         self.session.running_tasks[
             'wait_for_hands_completion_task'
         ] = wait_for_hands_completion_task
-        print('--- Задача запоминиана в сессии ---')
         players_ready = await wait_for_hands_completion_task
-        print('--- Задача завершена ---')
         self.session.kill_task('wait_for_hands_completion_task')
         match players_ready:
             case PlayerCode.BOTH:  # Оба игрока выбрали обе руки вовремя
@@ -276,16 +297,9 @@ class GameMaster:
 
     async def finish_game(self) -> None:
         """Завершает игру атомарно"""
-        print('--- Start finish_game ---')
-        print(f'--- GameMaster session: {self.session} ---')
-        print(f'--- GameMaster session_id: {self.session_id} ---')
-        print(f'--- GameSession sessions: {GameSession.sessions} ---')
-        print(f'--- GameMaster session.lock: {self.session.lock} ---')
         async with self.session.lock:
-            print('--- Lock acquired ---')
             # Проверяем, что игра еще не была завершена
             if self.session_id not in GameSession.sessions:
-                print('--- Game already finished ---')
                 return  # Значит игра уже была завершена оппонентом
 
             # Завершаем игру для обоих игроков (т.к. она еще не завершена)
@@ -293,8 +307,6 @@ class GameMaster:
                               text=LEXICON['game_finished'])
             await self.clear_states()
             await self.session.delete()
-            print(f'--- GameSession sessions: {GameSession.sessions} ---')
-            print('--- Game finished ---')
 
     async def react_to_cancellation(self, who_cancelled: PlayerCode) -> None:
         '''Реакция на отмену игры'''
@@ -309,6 +321,9 @@ class GameMaster:
 
     async def react_to_timeout(self, who_timeout: PlayerCode) -> None:
         '''Реакция на таймаут'''
+        # Удаляем сообщения с таймером для обоих игроков
+        await self.delete_message(whom=PlayerCode.BOTH, key='message_edited_id')
+
         match who_timeout:
             case PlayerCode.OPPONENT:
                 await self.answer(whom=PlayerCode.USER,
@@ -322,13 +337,14 @@ class GameMaster:
                                   text=LEXICON['you_are_too_long'])
         await self.finish_game()
 
-    async def wait_opponent_consent(self, send_every_n_seconds: int = 2,
+    async def wait_opponent_consent(self, send_every_n_seconds: int = 1,
                                     check_interval: float = 0.1,
                                     timeout: int = 10) -> None:
         """Ожидание ответа соперника с обновлениями статуса"""
         steps: int = 0
         send_every_step: int = int(send_every_n_seconds / check_interval)
         start_time: float = asyncio.get_event_loop().time()
+        first_message: bool = True
         while True:
             opponent_data = await self.get_data(PlayerCode.OPPONENT)
             decision: bool | None = opponent_data.get('ready_to_play')
@@ -343,10 +359,32 @@ class GameMaster:
             if steps % send_every_step == 0:
                 now_time = asyncio.get_event_loop().time()
                 left: int = timeout - int(now_time - start_time)
-                await self.message.answer(
-                    LEXICON['waiting_opponent'] + "\n" +
-                    LEXICON['seconds_left'].format(seconds=left)
-                )
+                if first_message:  # Если это первое сообщение,
+                    # то отправляем его (обоим игрокам)
+                    message_id_user = await self.answer(
+                        whom=PlayerCode.USER,
+                        text=LEXICON['waiting_opponent'] + "\n" +
+                        LEXICON['seconds_left'].format(seconds=left))
+                    message_id_opp = await self.answer(
+                        whom=PlayerCode.OPPONENT,
+                        text=LEXICON['user_wait_you'] + "\n" +
+                        LEXICON['game_will_cancel'].format(seconds=left))
+                    # Сохраняем id сообщения для последующего удаления
+                    await self.update_date(whom=PlayerCode.USER,
+                                           message_edited_id=message_id_user)
+                    await self.update_date(whom=PlayerCode.OPPONENT,
+                                           message_edited_id=message_id_opp)
+                    first_message = False
+                else:  # Если это не первое сообщение, то редактируем его
+                    await self.bot.edit_message_text(
+                        chat_id=self.user_id, message_id=message_id_user,
+                        text=LEXICON['waiting_opponent'] + "\n" +
+                        LEXICON['seconds_left'].format(seconds=left))
+                    await self.bot.edit_message_text(
+                        chat_id=self.opponent_id, message_id=message_id_opp,
+                        text=LEXICON['user_wait_you'] + "\n" +
+                        LEXICON['game_will_cancel'].format(seconds=left))
+
             await asyncio.sleep(check_interval)
             steps += 1
 

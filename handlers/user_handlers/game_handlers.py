@@ -91,6 +91,16 @@ async def process_second_hand(callback: CallbackQuery, state: FSMContext):
     # Вся логика таймера в .game_managers: GameMaster.wait_for_hands_completion
 
 
+# @router.callback_query(F.data.in_('first_hand', 'second_hand'),
+#                        StateFilter(FSMPlay.choice_hand))
+# async def process_hand_choice(callback: CallbackQuery, state: FSMContext):
+#     try:
+#         opponent_id = await GameMaster.get_opponent_id(callback, state)
+#     except KeyError:
+#         return  # Если соперник не найден, выходим из функции
+
+#     game_master = GameMaster(callback, state, opponent_id)
+
 
 
 # # Этот хэндлер срабатывает на любую из игровых кнопок

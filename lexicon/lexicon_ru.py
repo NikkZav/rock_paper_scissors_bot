@@ -54,7 +54,9 @@ LEXICON_ANSWERS: dict[str, str] = {
                       'бросает тебе вызов! '
                       'Готов принять его и сразиться с ним?',
     'waiting_opponent': 'Ждем пока соперник примет игру...',
+    'user_wait_you': 'Игрок ждет твоего решения',
     'seconds_left': 'Осталось {seconds} секунд',
+    'game_will_cancel': 'Игра будет отменена через {seconds} секунд',
     'opponent_cancelled_game': 'Соперник отказался от игры',
     'opponent_ready_to_play': 'Соперник готов к игре',
     'too_long_waiting_response': 'Слишком долгое ожидание ответа соперника',
