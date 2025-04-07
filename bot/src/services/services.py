@@ -1,8 +1,5 @@
 import random
-
-from lexicon.lexicon_ru import LEXICON_MOVES
-from database.db import online_users
-from random import choice
+from src.database.db import online_users
 
 
 # Функция, возвращающая случайный выбор бота в игре
@@ -29,5 +26,5 @@ def get_random_online_user(except_user_id: int) -> int:
     users.pop(except_user_id, None)
     if not len(users):
         raise IndexError
-    opponent_id = choice(list(users.keys()))
+    opponent_id = random.choice(list(users.keys()))
     return opponent_id

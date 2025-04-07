@@ -1,13 +1,13 @@
 from aiogram import F, Router, Bot
 from aiogram.filters import Command, CommandStart
 from aiogram.types import Message, CallbackQuery
-from keyboards.keyboards import yes_no_kb, create_inline_kb
-from lexicon.lexicon_ru import LEXICON
-from services.services import get_random_online_user
 from aiogram.filters import Command, CommandStart, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
-from states.states import FSMMenu, FSMPlay
+from src.keyboards.keyboards import yes_no_kb, create_inline_kb
+from src.lexicon.lexicon_ru import LEXICON
+from src.services.services import get_random_online_user
+from src.states.states import FSMMenu, FSMPlay
 
 
 router = Router()

@@ -1,12 +1,12 @@
 import asyncio
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
-from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from states.states import FSMPlay
+from src.lexicon.lexicon_ru import LEXICON_MOVES
+from src.states.states import FSMPlay
+from src.utils.enums import PlayerCode
 from .game_managers import GameMaster
-from utils.enums import PlayerCode
 
 
 router = Router()
@@ -25,10 +25,10 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
     # Обновляем данные пользователя о готовности к игре
     await game_master.update_date(whom=PlayerCode.USER, ready_to_play=True)
 
-    # Если задача на ожидание согласия соперника уже запущена соперником, то...
-    if game_master.session.running_tasks.get('wait_opponent_consent_task'):
-        await game_master.start_first_hand_round()  # Запускаем первый раунд
-        return  # Выходим из функции, так как соперник уже запустил задачу
+    # # Если задача на ожидание согласия соперника уже запущена соперником, то...
+    # if game_master.session.running_tasks.get('wait_opponent_consent_task'):
+    #     await game_master.start_first_hand_round()  # Запускаем первый раунд
+    #     return  # Выходим из функции, так как соперник уже запустил задачу
 
     try:  # Запускаем задачу на ожидание согласия соперника (с таймаутом)
         await game_master.run_waiting_opponent_consent_task(timeout=10)

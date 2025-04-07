@@ -4,10 +4,12 @@ import logging
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from config_data.config import Config, load_config
-from handlers import other_handlers, user_routers
-from middlewares.actual_state import OnlineUserMiddleware
-from database.db import cleanup_task, online_users
+from src.config_data.config import Config, load_config
+from src.handlers import other_handlers, user_routers
+from src.middlewares.actual_state import OnlineUserMiddleware
+from src.database.db import cleanup_task, online_users
+from aiogram.fsm.storage.redis import RedisStorage
+from redis.asyncio import Redis
 
 
 # Инициализируем логгер
@@ -28,12 +30,18 @@ async def main():
     # Загружаем конфиг в переменную config
     config: Config = load_config()
 
+    # Инициализируем Redis
+    redis = Redis(host='localhost')
+
+    # Инициализируем хранилище (создаем экземпляр класса MemoryStorage)
+    storage = RedisStorage(redis=redis)
+
     # Инициализируем бот и диспетчер
     bot = Bot(
         token=config.tg_bot.token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML)
     )
-    dp = Dispatcher()
+    dp = Dispatcher(storage=storage)
 
     asyncio.create_task(cleanup_task(online_users))
 

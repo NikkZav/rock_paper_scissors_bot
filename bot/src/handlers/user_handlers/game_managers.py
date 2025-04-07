@@ -4,11 +4,11 @@ from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.fsm.storage.base import StateType, StorageKey
-from lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
-from keyboards.keyboards import create_inline_kb
-from states.states import FSMPlay
-from utils.enums import PlayerCode
 from typing import TypeAlias
+from src.lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
+from src.keyboards.keyboards import create_inline_kb
+from src.states.states import FSMPlay
+from src.utils.enums import PlayerCode
 
 
 class GameSession:
@@ -140,7 +140,7 @@ class GameMaster:
             case PlayerCode.OPPONENT:
                 whom_chat_id = ((PlayerCode.OPPONENT, self.opponent_id),)
             case PlayerCode.BOTH:
-                whom_chat_id: tuple[tuple[PlayerCode, int]] = (
+                whom_chat_id: tuple[tuple[PlayerCode, int], ...] = (
                     (PlayerCode.USER, self.user_id),
                     (PlayerCode.OPPONENT, self.opponent_id))
         # Удаляем сообщение

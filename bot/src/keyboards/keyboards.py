@@ -2,7 +2,7 @@ from aiogram.types import (ReplyKeyboardMarkup, KeyboardButton,
                            InlineKeyboardMarkup, InlineKeyboardButton)
 from aiogram.utils.keyboard import ReplyKeyboardBuilder, InlineKeyboardBuilder
 
-from lexicon.lexicon_ru import LEXICON
+from src.lexicon.lexicon_ru import LEXICON
 
 # ------- Создаем клавиатуру через ReplyKeyboardBuilder -------
 

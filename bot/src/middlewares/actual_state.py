@@ -1,7 +1,7 @@
 from typing import Any, Awaitable, Callable, Dict, Optional
 from aiogram import BaseMiddleware
-from aiogram.types import Update, Message, CallbackQuery, TelegramObject
-from database.db import online_users
+from aiogram.types import Update, TelegramObject
+from src.database.db import online_users
 
 
 class OnlineUserMiddleware(BaseMiddleware):
