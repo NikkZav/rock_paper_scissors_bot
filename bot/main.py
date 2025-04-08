@@ -6,8 +6,8 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from src.config_data.config import Config, load_config
 from src.handlers import other_handlers, user_routers
-from src.middlewares.actual_state import OnlineUserMiddleware
-from src.database.db import cleanup_task, online_users
+from src.middlewares.middlewares import OnlineUserMiddleware, DataBaseMiddleware
+from shared.repositories.db import cleanup_task, online_users
 from aiogram.fsm.storage.redis import RedisStorage
 from redis.asyncio import Redis
 
@@ -31,10 +31,10 @@ async def main():
     config: Config = load_config()
 
     # Инициализируем Redis
-    redis = Redis(host='localhost')
+    rdb = Redis(host='localhost')
 
     # Инициализируем хранилище (создаем экземпляр класса MemoryStorage)
-    storage = RedisStorage(redis=redis)
+    storage = RedisStorage(redis=rdb)
 
     # Инициализируем бот и диспетчер
     bot = Bot(
@@ -46,6 +46,7 @@ async def main():
     asyncio.create_task(cleanup_task(online_users))
 
     # Регистрация middleware
+    dp.update.outer_middleware(DataBaseMiddleware(rdb=rdb))
     dp.update.middleware(OnlineUserMiddleware())
 
     # Регистриуем роутеры в диспетчере

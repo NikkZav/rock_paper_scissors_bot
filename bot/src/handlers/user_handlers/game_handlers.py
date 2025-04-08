@@ -1,11 +1,10 @@
-import asyncio
 from aiogram import F, Router
 from aiogram.types import CallbackQuery
 from aiogram.filters import StateFilter
 from aiogram.fsm.context import FSMContext
-from src.lexicon.lexicon_ru import LEXICON_MOVES
-from src.states.states import FSMPlay
-from src.utils.enums import PlayerCode
+from shared.lexicon.lexicon_ru import LEXICON_MOVES
+from shared.states.states import FSMPlay
+from shared.utils.enums import PlayerCode
 from .game_managers import GameMaster
 
 
@@ -25,25 +24,23 @@ async def process_start_game(callback: CallbackQuery, state: FSMContext):
     # Обновляем данные пользователя о готовности к игре
     await game_master.update_date(whom=PlayerCode.USER, ready_to_play=True)
 
-    # # Если задача на ожидание согласия соперника уже запущена соперником, то...
-    # if game_master.session.running_tasks.get('wait_opponent_consent_task'):
-    #     await game_master.start_first_hand_round()  # Запускаем первый раунд
-    #     return  # Выходим из функции, так как соперник уже запустил задачу
+    # Запускаем таймер для задачи ожидание согласия соперника
+    await game_master.schedule_timeout(timer_name='wait_opponent_consent_task',
+                                       timeout=10)
 
-    try:  # Запускаем задачу на ожидание согласия соперника (с таймаутом)
-        await game_master.run_waiting_opponent_consent_task(timeout=10)
-    except asyncio.CancelledError:  # Соперник отменил игру
-        pass  # Ничего не делаем, так как игра уже завершена противником
-    except asyncio.TimeoutError:  # Слишком долго ждем ответа от соперника
-        await game_master.react_to_timeout(who_timeout=PlayerCode.OPPONENT)
-    else:  # Соперник согласился на игру, запускаем первый раунд игры
-        await game_master.start_first_hand_round()
-        # Паралелльно запускаем задачу ожидающую выбора обеих рук (с таймаутом)
-        # Если игрок не успевает сделать выбор, то он проигрывает раунд
-        # Если оба игрока сделали выбор, то запускаем раунд выбора руки
-        await game_master.run_delayed_start_hand_choice_round_task(timeout=10)
-    finally:  # Убиваем задачу ожидания согласия соперника, если она не умерла
-        game_master.session.kill_task('wait_opponent_consent_task')
+    # try:  
+    # except asyncio.CancelledError:  # Соперник отменил игру
+    #     pass  # Ничего не делаем, так как игра уже завершена противником
+    # except asyncio.TimeoutError:  # Слишком долго ждем ответа от соперника
+    #     await game_master.react_to_timeout(who_timeout=PlayerCode.OPPONENT)
+    # else:  # Соперник согласился на игру, запускаем первый раунд игры
+    #     await game_master.start_first_hand_round()
+    #     # Паралелльно запускаем задачу ожидающую выбора обеих рук (с таймаутом)
+    #     # Если игрок не успевает сделать выбор, то он проигрывает раунд
+    #     # Если оба игрока сделали выбор, то запускаем раунд выбора руки
+    #     await game_master.run_delayed_start_hand_choice_round_task(timeout=10)
+    # finally:  # Убиваем задачу ожидания согласия соперника, если она не умерла
+    #     game_master.session.kill_task('wait_opponent_consent_task')
 
 
 @router.callback_query(F.data == "refuse",

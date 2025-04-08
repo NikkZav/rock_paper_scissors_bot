@@ -40,4 +40,4 @@ async def cleanup_task(online_users: OnlineUsers) -> None:
         print("Online users:", online_users.users)
 
 # Сообщаем, что модуль успешно импортирован
-print("Модуль database.db импортирован")
+print("Модуль repositories.db импортирован")

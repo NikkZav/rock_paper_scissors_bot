@@ -1,5 +1,5 @@
 import random
-from src.database.db import online_users
+from src.repositories.db import online_users
 
 
 # Функция, возвращающая случайный выбор бота в игре

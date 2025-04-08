@@ -1,43 +1,14 @@
-import asyncio
 from aiogram import Bot
 from aiogram.types import Message, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import default_state
 from aiogram.fsm.storage.base import StateType, StorageKey
-from typing import TypeAlias
-from src.lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
+from shared.lexicon.lexicon_ru import LEXICON, LEXICON_MOVES
 from src.keyboards.keyboards import create_inline_kb
-from src.states.states import FSMPlay
-from src.utils.enums import PlayerCode
-
-
-class GameSession:
-
-    # Уникальный идентификатор сессии (tuple из двух id)
-    SessionId: TypeAlias = tuple[int, int]
-
-    # Хранилище сеансов по уникальному идентификатору (tuple из двух id)
-    sessions: dict[SessionId, 'GameSession'] = {}
-
-    def __init__(self, session_id: SessionId):
-        self.session_id = session_id
-        self.lock = asyncio.Lock()  # Блокировка для атомарных операций
-        self.__class__.sessions[session_id] = self
-        self.running_tasks: dict[str, asyncio.Task] = {}
-
-    def kill_task(self, task_name: str) -> None:
-        if task := self.running_tasks.get(task_name):
-            task.cancel()
-            del self.running_tasks[task_name]
-
-    async def delete(self) -> None:
-        del self.__class__.sessions[self.session_id]
-
-    @staticmethod
-    def generate_session_id(user_id: int, opponent_id: int) -> SessionId:
-        # Убедимся, что идентификатор будет одинаков для обеих сторон
-        ids = sorted((user_id, opponent_id))
-        return (ids[0], ids[1])
+from shared.states.states import FSMPlay
+from shared.utils.enums import PlayerCode
+from shared.repositories.redis import session_manager
+from shared.schemas.game_schemas import GameTimer
 
 
 class GameMaster:
@@ -53,13 +24,8 @@ class GameMaster:
         self.opponent_id: int = opponent_id
         self.opponent_context: FSMContext = self._get_context(opponent_id)
 
-        self.session_id = GameSession.generate_session_id(self.user_id,
-                                                          self.opponent_id)
-        # Получаем или создаем игровую сессию
-        if session := GameSession.sessions.get(self.session_id):
-            self.session = session
-        else:  # Если сессии нет, создаем новую сессию
-            self.session = GameSession(session_id=self.session_id)
+        self.session_id = session_manager.generate_session_id(self.user_id,
+                                                              self.opponent_id)
 
     def _get_user_id(self) -> int:
         return self.callback.from_user.id
@@ -143,7 +109,7 @@ class GameMaster:
                 whom_chat_id: tuple[tuple[PlayerCode, int], ...] = (
                     (PlayerCode.USER, self.user_id),
                     (PlayerCode.OPPONENT, self.opponent_id))
-        # Удаляем сообщение
+        # Удаляем сообщение(я)
         for whom, chat_id in whom_chat_id:
             message_id = (
                 await self.get_data(whom=whom)
@@ -184,70 +150,39 @@ class GameMaster:
         await self.answer(whom=PlayerCode.OPPONENT,
                           text=LEXICON['opponent_hands'].format(**user_hands))
 
-    async def wait_for_hands_completion(self, timeout: int = 10,
-                                        check_interval: float = 0.1
-                                        ) -> PlayerCode:
+    async def schedule_timer(self, timer_name: str,
+                             frequency: float, timeout: int) -> None:
         """
-        Ожидает, пока оба игрока выберут два хода (first_hand и second_hand)
-        в течение timeout секунд. Если оба выбрали – возвращает BOTH.
-        Если только один – возвращает USER или OPPONENT того, кто успел.
+        Сохраняет задачу-таймер в Sorted Set "game_timers".
+
+        Параметры:
+        - session_id: строка, уникальный идентификатор сессии (например, "123:456").
+        - timer_name: имя таймера (например, "wait_opponent_consent").
+        - frequency: интервал между тактами (в секундах).
+        - timeout: общее время жизни задачи (например, 10 секунд).
+
+        Действия:
+        1. Вычисляем expire_at как текущее время + timeout.
+        2. Устанавливаем next_tick как текущее время + frequency.
+        3. Формируем элемент JSON.
+        4. Добавляем его в Sorted Set "game_timers" с score = next_tick.
         """
-        start_time = asyncio.get_event_loop().time()
-        while True:
-            user_state, opp_state = await self.get_state_both()
+        timer = GameTimer(session_id=self.session_id,
+                          timer_name=timer_name,
+                          frequency=frequency,
+                          timeout=timeout)
+        element = timer.model_dump_json()
+        # Добавляем элемент в Sorted Set "game_timers" с score равным next_tick
+        await session_manager.redis.zadd("game_timers",
+                                         {element: timer.next_tick})
 
-            user_complete = (user_state == FSMPlay.both_hands_ready)
-            opp_complete = (opp_state == FSMPlay.both_hands_ready)
-
-            if user_complete and opp_complete:
-                return PlayerCode.BOTH
-
-            elapsed = asyncio.get_event_loop().time() - start_time
-            if elapsed >= timeout:
-                if user_complete and not opp_complete:
-                    return PlayerCode.USER
-                elif opp_complete and not user_complete:
-                    return PlayerCode.OPPONENT
-                else:
-                    return PlayerCode.NOBODY
-            await asyncio.sleep(check_interval)
-
-    async def run_delayed_start_hand_choice_round_task(
-            self, timeout: int = 10,
-            check_interval: float = 0.1) -> None:
-        """Запускает задачу на ожидание выбора хода соперником"""
-        if 'wait_for_hands_completion_task' in self.session.running_tasks:
-            print('--- Задача уже запущена другим игроком ---')
-            return  # Если задача уже запущена, выходим из функции
-        wait_for_hands_completion_task = asyncio.create_task(
-            self.wait_for_hands_completion(timeout, check_interval)
-        )
-        self.session.running_tasks[
-            'wait_for_hands_completion_task'
-        ] = wait_for_hands_completion_task
-        players_ready = await wait_for_hands_completion_task
-        self.session.kill_task('wait_for_hands_completion_task')
-        match players_ready:
-            case PlayerCode.BOTH:  # Оба игрока выбрали обе руки вовремя
-                await self.show_players_hands()
-                await self.start_hand_choice_round()
-                return  # Игра продолжается
-            case PlayerCode.USER:  # Пользователь успел, а соперник не нет
-                await self.answer(whom=PlayerCode.OPPONENT,
-                                  text=LEXICON['you_are_too_long'])
-                await self.answer(whom=PlayerCode.USER,
-                                  text=LEXICON['opponent_is_too_long'])
-                await self.announce_winner(winner_id=self.user_id)
-            case PlayerCode.OPPONENT:  # Соперник успел, а пользователь нет
-                await self.answer(whom=PlayerCode.USER,
-                                  text=LEXICON['you_are_too_long'])
-                await self.answer(whom=PlayerCode.OPPONENT,
-                                  text=LEXICON['opponent_is_too_long'])
-                await self.announce_winner(winner_id=self.opponent_id)
-            case PlayerCode.NOBODY:  # Никто не успел — игра отменяется
-                await self.answer(whom=PlayerCode.BOTH,
-                                  text=LEXICON['both_are_too_long'])
-        await self.finish_game()  # Игра завершается
+    async def cancel_timeout(self, timer_name: str):
+        """
+        Удаляет таймер из Sorted Set по ключу.
+        """
+        key = "game_timers"
+        element = f"{self.session_id}:{timer_name}"
+        await session_manager.redis.zrem(key, element)
 
     async def start_first_hand_round(self) -> None:
         # Создаем клавиатуру для выбора действия у первой руки
@@ -297,16 +232,15 @@ class GameMaster:
 
     async def finish_game(self) -> None:
         """Завершает игру атомарно"""
-        async with self.session.lock:
-            # Проверяем, что игра еще не была завершена
-            if self.session_id not in GameSession.sessions:
-                return  # Значит игра уже была завершена оппонентом
+        # Проверяем, что игра еще не была завершена
+        if await session_manager.get_session(self.session_id):
+            return  # Значит игра уже была завершена оппонентом
 
-            # Завершаем игру для обоих игроков (т.к. она еще не завершена)
-            await self.answer(whom=PlayerCode.BOTH,
-                              text=LEXICON['game_finished'])
-            await self.clear_states()
-            await self.session.delete()
+        # Завершаем игру для обоих игроков (т.к. она еще не завершена)
+        await self.answer(whom=PlayerCode.BOTH,
+                          text=LEXICON['game_finished'])
+        await self.clear_states()
+        await session_manager.delete_session(self.session_id)
 
     async def react_to_cancellation(self, who_cancelled: PlayerCode) -> None:
         '''Реакция на отмену игры'''
@@ -337,69 +271,69 @@ class GameMaster:
                                   text=LEXICON['you_are_too_long'])
         await self.finish_game()
 
-    async def wait_opponent_consent(self, send_every_n_seconds: int = 1,
-                                    check_interval: float = 0.1,
-                                    timeout: int = 10) -> None:
-        """Ожидание ответа соперника с обновлениями статуса"""
-        steps: int = 0
-        send_every_step: int = int(send_every_n_seconds / check_interval)
-        start_time: float = asyncio.get_event_loop().time()
-        first_message: bool = True
-        while True:
-            opponent_data = await self.get_data(PlayerCode.OPPONENT)
-            decision: bool | None = opponent_data.get('ready_to_play')
+    # async def wait_opponent_consent(self, send_every_n_seconds: int = 1,
+    #                                 check_interval: float = 0.1,
+    #                                 timeout: int = 10) -> None:
+    #     """Ожидание ответа соперника с обновлениями статуса"""
+    #     steps: int = 0
+    #     send_every_step: int = int(send_every_n_seconds / check_interval)
+    #     start_time: float = asyncio.get_event_loop().time()
+    #     first_message: bool = True
+    #     while True:
+    #         opponent_data = await self.get_data(PlayerCode.OPPONENT)
+    #         decision: bool | None = opponent_data.get('ready_to_play')
 
-            # Проверяем не отменил ли соперник игру
-            if decision is False or 'opponent_id' not in opponent_data:
-                raise asyncio.CancelledError  # Вызываем отмену задачи
+    #         # Проверяем не отменил ли соперник игру
+    #         if decision is False or 'opponent_id' not in opponent_data:
+    #             raise asyncio.CancelledError  # Вызываем отмену задачи
 
-            if decision is True:  # Если соперник готов к игре
-                return  # Выходим из функции и завершаем задачу
+    #         if decision is True:  # Если соперник готов к игре
+    #             return  # Выходим из функции и завершаем задачу
 
-            if steps % send_every_step == 0:
-                now_time = asyncio.get_event_loop().time()
-                left: int = timeout - int(now_time - start_time)
-                if first_message:  # Если это первое сообщение,
-                    # то отправляем его (обоим игрокам)
-                    message_id_user = await self.answer(
-                        whom=PlayerCode.USER,
-                        text=LEXICON['waiting_opponent'] + "\n" +
-                        LEXICON['seconds_left'].format(seconds=left))
-                    message_id_opp = await self.answer(
-                        whom=PlayerCode.OPPONENT,
-                        text=LEXICON['user_wait_you'] + "\n" +
-                        LEXICON['game_will_cancel'].format(seconds=left))
-                    # Сохраняем id сообщения для последующего удаления
-                    await self.update_date(whom=PlayerCode.USER,
-                                           message_edited_id=message_id_user)
-                    await self.update_date(whom=PlayerCode.OPPONENT,
-                                           message_edited_id=message_id_opp)
-                    first_message = False
-                else:  # Если это не первое сообщение, то редактируем его
-                    await self.bot.edit_message_text(
-                        chat_id=self.user_id, message_id=message_id_user,
-                        text=LEXICON['waiting_opponent'] + "\n" +
-                        LEXICON['seconds_left'].format(seconds=left))
-                    await self.bot.edit_message_text(
-                        chat_id=self.opponent_id, message_id=message_id_opp,
-                        text=LEXICON['user_wait_you'] + "\n" +
-                        LEXICON['game_will_cancel'].format(seconds=left))
+    #         if steps % send_every_step == 0:
+    #             now_time = asyncio.get_event_loop().time()
+    #             left: int = timeout - int(now_time - start_time)
+    #             if first_message:  # Если это первое сообщение,
+    #                 # то отправляем его (обоим игрокам)
+    #                 message_id_user = await self.answer(
+    #                     whom=PlayerCode.USER,
+    #                     text=LEXICON['waiting_opponent'] + "\n" +
+    #                     LEXICON['seconds_left'].format(seconds=left))
+    #                 message_id_opp = await self.answer(
+    #                     whom=PlayerCode.OPPONENT,
+    #                     text=LEXICON['user_wait_you'] + "\n" +
+    #                     LEXICON['game_will_cancel'].format(seconds=left))
+    #                 # Сохраняем id сообщения для последующего удаления
+    #                 await self.update_date(whom=PlayerCode.USER,
+    #                                        message_edited_id=message_id_user)
+    #                 await self.update_date(whom=PlayerCode.OPPONENT,
+    #                                        message_edited_id=message_id_opp)
+    #                 first_message = False
+    #             else:  # Если это не первое сообщение, то редактируем его
+    #                 await self.bot.edit_message_text(
+    #                     chat_id=self.user_id, message_id=message_id_user,
+    #                     text=LEXICON['waiting_opponent'] + "\n" +
+    #                     LEXICON['seconds_left'].format(seconds=left))
+    #                 await self.bot.edit_message_text(
+    #                     chat_id=self.opponent_id, message_id=message_id_opp,
+    #                     text=LEXICON['user_wait_you'] + "\n" +
+    #                     LEXICON['game_will_cancel'].format(seconds=left))
 
-            await asyncio.sleep(check_interval)
-            steps += 1
+    #         await asyncio.sleep(check_interval)
+    #         steps += 1
 
-    async def run_waiting_opponent_consent_task(self,
-                                                timeout: int = 10) -> None:
-        '''Запуск задачи на ожидание согласия соперника с таймаутом'''
-        wait_opponent_consent_task = asyncio.create_task(
-            self.wait_opponent_consent(timeout=timeout)
-        )
-        if 'wait_opponent_consent_task' in self.session.running_tasks:
-            return  # Если задача уже запущена, то выходим из функции
-        self.session.running_tasks[
-            'wait_opponent_consent_task'
-        ] = wait_opponent_consent_task
-        await asyncio.wait_for(wait_opponent_consent_task, timeout=timeout)
+    # async def run_waiting_opponent_consent_task(self,
+    #                                             timeout: int = 10) -> None:
+    #     '''Запуск задачи на ожидание согласия соперника с таймаутом'''
+    #     wait_opponent_consent_task = asyncio.create_task(
+    #         self.wait_opponent_consent(timeout=timeout)
+    #     )
+    #     if 'wait_opponent_consent_task' in self.session.running_tasks:
+    #         return  # Если задача уже запущена, то выходим из функции
+    #     self.session.running_tasks[
+    #         'wait_opponent_consent_task'
+    #     ] = wait_opponent_consent_task
+    #     await asyncio.wait_for(wait_opponent_consent_task, timeout=timeout)
 
     @staticmethod
     async def get_opponent_id(callback: CallbackQuery,
